@@ -879,6 +879,386 @@ function parseFields(text) {
   return out
 }
 
+// ------------------------------------------------------------------ editor
+
+// Everything the visual rule editor needs, kept here so it stays pure and
+// testable. The editor works on a "draft": a plain-JS mirror of the rules
+// file where every value is a string exactly as the user typed it. Saving
+// converts the draft back to the raw TOML structure, validates it through the
+// same compileConfig the engine uses, and serializes it — so the GUI can
+// never write a file the engine would then reject.
+
+var GENERATED_HEADER = "# Omazel rules — written by the visual editor."
+
+var FIELD_OPTIONS = [
+  { value: "name", label: "Name" },
+  { value: "fullname", label: "Full name" },
+  { value: "extension", label: "Extension" },
+  { value: "kind", label: "Kind" },
+  { value: "path", label: "Path" },
+  { value: "size", label: "Size" },
+  { value: "age", label: "Age" }
+]
+
+var GROUP_OPTIONS = [
+  { value: "all", label: "All" },
+  { value: "any", label: "Any" },
+  { value: "none", label: "None" }
+]
+
+var STRING_OP_OPTIONS = [
+  { value: "is", label: "is" },
+  { value: "is_not", label: "is not" },
+  { value: "contains", label: "contains" },
+  { value: "not_contains", label: "doesn't contain" },
+  { value: "starts_with", label: "starts with" },
+  { value: "ends_with", label: "ends with" },
+  { value: "matches", label: "matches regex" },
+  { value: "in", label: "is one of" },
+  { value: "not_in", label: "is not one of" }
+]
+
+var NUMBER_OP_OPTIONS = [
+  { value: "gt", label: "more than" },
+  { value: "lt", label: "less than" },
+  { value: "gte", label: "at least" },
+  { value: "lte", label: "at most" },
+  { value: "is", label: "exactly" },
+  { value: "is_not", label: "not exactly" }
+]
+
+function opsForField(field) {
+  return FIELDS[field] === "number" ? NUMBER_OP_OPTIONS : STRING_OP_OPTIONS
+}
+
+var ACTION_OPTIONS = [
+  { value: "move", label: "Move to folder" },
+  { value: "copy", label: "Copy to folder" },
+  { value: "rename", label: "Rename" },
+  { value: "sort", label: "Sort into subfolder" },
+  { value: "trash", label: "Move to trash" },
+  { value: "delete", label: "Delete" },
+  { value: "extract", label: "Extract archive" },
+  { value: "compress", label: "Compress" },
+  { value: "notify", label: "Send notification" },
+  { value: "run", label: "Run command" },
+  { value: "encrypt", label: "Encrypt with age" },
+  { value: "upload", label: "Upload / send" }
+]
+
+function valuePlaceholder(field, op) {
+  if (field === "size") return "e.g. 10 MB"
+  if (field === "age") return "e.g. 30d or 2w"
+  if (op === "in" || op === "not_in") return "comma-separated: pdf, docx"
+  if (op === "matches") return "regular expression"
+  if (field === "kind") return "image, video, document, archive…"
+  return "value"
+}
+
+// Which inputs the editor renders for an action. Upload's fields depend on
+// the chosen provider, which is why the current params are passed in.
+function actionParams(verb, params) {
+  if (verb === "move" || verb === "copy") return [
+    { key: "to", label: "To folder", type: "text", placeholder: "~/Documents/{year}", required: true },
+    { key: "as", label: "Rename as", type: "text", placeholder: "optional — {date} {name}.{ext}" }
+  ]
+  if (verb === "rename") return [
+    { key: "pattern", label: "Pattern", type: "text", placeholder: "{date} {name}", required: true }
+  ]
+  if (verb === "sort") return [
+    { key: "into", label: "Subfolder", type: "text", placeholder: "{ext} or {year}/{month}", required: true }
+  ]
+  if (verb === "run") return [
+    { key: "command", label: "Command", type: "text", placeholder: "file passed as $1", required: true }
+  ]
+  if (verb === "notify") return [
+    { key: "message", label: "Message", type: "text", placeholder: "Filed {fullname}" }
+  ]
+  if (verb === "extract") return [
+    { key: "to", label: "Extract to", type: "text", placeholder: "optional — same folder" },
+    { key: "delete_archive", label: "Delete archive after", type: "bool" }
+  ]
+  if (verb === "compress") return [
+    { key: "to", label: "Archive folder", type: "text", placeholder: "optional — same folder" },
+    { key: "name", label: "Archive name", type: "text", placeholder: "{name}.zip" }
+  ]
+  if (verb === "encrypt") return [
+    { key: "recipient", label: "Recipient", type: "text", placeholder: "age1…" },
+    { key: "recipients_file", label: "Recipients file", type: "text", placeholder: "or a file of recipients" },
+    { key: "identity", label: "Identity file", type: "text", placeholder: "for round-trip verification" },
+    { key: "delete_original", label: "Delete original after", type: "bool" },
+    { key: "verify", label: "Verify round trip", type: "bool" }
+  ]
+  if (verb === "upload") {
+    var out = [{ key: "via", label: "Send via", type: "choice", options: [
+      { value: "taildrop", label: "Taildrop" },
+      { value: "dropbox", label: "Dropbox (rclone)" },
+      { value: "protondrive", label: "Proton Drive (rclone)" }
+    ] }]
+    var via = params && params.via !== undefined ? String(params.via) : "taildrop"
+    if (via === "taildrop") {
+      out.push({ key: "device", label: "Device", type: "text", placeholder: "phone", required: true })
+    } else {
+      out.push({ key: "remote", label: "rclone remote", type: "text", placeholder: via })
+      out.push({ key: "path", label: "Remote path", type: "text", placeholder: "Inbox" })
+    }
+    return out
+  }
+  return []
+}
+
+function defaultParamsFor(verb) {
+  if (verb === "upload") return { via: "taildrop" }
+  if (verb === "encrypt") return { verify: true }
+  return {}
+}
+
+function newDraftCondition() {
+  return { group: "all", field: "name", op: "contains", value: "" }
+}
+
+function newDraftAction() {
+  return { verb: "move", params: {} }
+}
+
+function newDraftRule() {
+  return { name: "New rule", conditions: [newDraftCondition()], actions: [newDraftAction()] }
+}
+
+function newDraftFolder() {
+  return { path: "~/Downloads", recursive: false, enabled: true, ignore: "", rules: [newDraftRule()] }
+}
+
+function rawConditionToDraft(c) {
+  var d = newDraftCondition()
+  if (typeof c !== "object" || c === null) return d
+  if (FIELDS[String(c.field)] !== undefined) d.field = String(c.field)
+  var op = null
+  var value
+  if (c.op !== undefined) {
+    op = String(c.op)
+    value = c.value
+  } else {
+    for (var key in c) {
+      if (key === "field") continue
+      if (STRING_OPS[key] || NUMBER_OPS[key]) { op = key; value = c[key]; break }
+    }
+  }
+  if (op !== null) d.op = op
+  d.value = isArrayValue(value) ? value.join(", ") : (value === undefined ? "" : String(value))
+  return d
+}
+
+// Raw parsed TOML -> editable draft. Tolerant on purpose: a half-broken value
+// becomes something editable rather than an error, because the whole point of
+// the editor is fixing things.
+function draftFromRaw(raw) {
+  var out = []
+  var rawFolders = raw && isArrayValue(raw.folder) ? raw.folder : []
+  for (var f = 0; f < rawFolders.length; f++) {
+    var rf = rawFolders[f]
+    if (typeof rf !== "object" || rf === null) continue
+    var folder = {
+      path: rf.path !== undefined ? String(rf.path) : "",
+      recursive: rf.recursive === true,
+      enabled: rf.enabled !== false,
+      ignore: isArrayValue(rf.ignore) ? rf.ignore.join(", ") : "",
+      rules: []
+    }
+    var rawRules = isArrayValue(rf.rule) ? rf.rule : []
+    for (var r = 0; r < rawRules.length; r++) {
+      var rr = rawRules[r]
+      if (typeof rr !== "object" || rr === null) continue
+      var rule = {
+        name: rr.name !== undefined ? String(rr.name) : "Rule " + (r + 1),
+        conditions: [],
+        actions: []
+      }
+      var groups = ["all", "any", "none"]
+      for (var g = 0; g < groups.length; g++) {
+        if (!isArrayValue(rr[groups[g]])) continue
+        for (var c = 0; c < rr[groups[g]].length; c++) {
+          var cond = rawConditionToDraft(rr[groups[g]][c])
+          cond.group = groups[g]
+          rule.conditions.push(cond)
+        }
+      }
+      var rawActions = isArrayValue(rr.actions) ? rr.actions : []
+      for (var a = 0; a < rawActions.length; a++) {
+        var ra = rawActions[a]
+        if (typeof ra !== "object" || ra === null) continue
+        var verb = ACTION_SPECS[String(ra["do"])] !== undefined ? String(ra["do"]) : "move"
+        var spec = ACTION_SPECS[verb]
+        var params = defaultParamsFor(verb)
+        var keys = spec.required.concat(spec.optional)
+        for (var k = 0; k < keys.length; k++) {
+          if (ra[keys[k]] === undefined) continue
+          params[keys[k]] = typeof ra[keys[k]] === "boolean" ? ra[keys[k]] : String(ra[keys[k]])
+        }
+        rule.actions.push({ verb: verb, params: params })
+      }
+      folder.rules.push(rule)
+    }
+    out.push(folder)
+  }
+  return out
+}
+
+function splitList(text) {
+  var out = []
+  var parts = String(text).split(",")
+  for (var i = 0; i < parts.length; i++) {
+    var t = parts[i].trim()
+    if (t !== "") out.push(t)
+  }
+  return out
+}
+
+// Editable draft -> raw TOML structure, dropping empty optionals and any
+// params that do not apply (e.g. an rclone remote left over after switching
+// an upload to Taildrop).
+function draftToRaw(draft) {
+  var raw = { folder: [] }
+  var list = isArrayValue(draft) ? draft : []
+  for (var f = 0; f < list.length; f++) {
+    var df = list[f]
+    var folder = { path: String(df.path || "").trim() }
+    if (df.recursive === true) folder.recursive = true
+    if (df.enabled === false) folder.enabled = false
+    var globs = splitList(df.ignore || "")
+    if (globs.length > 0) folder.ignore = globs
+    folder.rule = []
+    var rules = isArrayValue(df.rules) ? df.rules : []
+    for (var r = 0; r < rules.length; r++) {
+      var dr = rules[r]
+      var rule = { name: String(dr.name || "").trim() || "Untitled rule" }
+      var conds = isArrayValue(dr.conditions) ? dr.conditions : []
+      for (var c = 0; c < conds.length; c++) {
+        var dc = conds[c]
+        var value = String(dc.value === undefined ? "" : dc.value).trim()
+        var table = { field: String(dc.field || "name") }
+        table[String(dc.op || "contains")] =
+          (dc.op === "in" || dc.op === "not_in") ? splitList(value) : value
+        var group = dc.group === "any" || dc.group === "none" ? dc.group : "all"
+        if (rule[group] === undefined) rule[group] = []
+        rule[group].push(table)
+      }
+      rule.actions = []
+      var acts = isArrayValue(dr.actions) ? dr.actions : []
+      for (var a = 0; a < acts.length; a++) {
+        var da = acts[a]
+        var verb = ACTION_SPECS[String(da.verb)] !== undefined ? String(da.verb) : "move"
+        var spec = ACTION_SPECS[verb]
+        var action = { "do": verb }
+        var keys = spec.required.concat(spec.optional)
+        for (var k = 0; k < keys.length; k++) {
+          var pv = da.params ? da.params[keys[k]] : undefined
+          if (pv === undefined) continue
+          if (typeof pv === "boolean") {
+            // Booleans only appear when they differ from the default, so a
+            // hand-written file and a GUI-written one stay equally terse.
+            if (keys[k] === "verify" ? pv === false : pv === true) action[keys[k]] = pv
+          } else {
+            var s = String(pv).trim()
+            if (s !== "") action[keys[k]] = s
+          }
+        }
+        if (verb === "upload") {
+          if (String(action.via) === "taildrop") { delete action.remote; delete action.path }
+          else delete action.device
+        }
+        rule.actions.push(action)
+      }
+      folder.rule.push(rule)
+    }
+    raw.folder.push(folder)
+  }
+  return raw
+}
+
+function tomlString(s) {
+  return '"' + String(s)
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\t/g, "\\t") + '"'
+}
+
+function tomlValue(v) {
+  if (typeof v === "boolean") return v ? "true" : "false"
+  if (typeof v === "number") return String(v)
+  if (isArrayValue(v)) {
+    var parts = []
+    for (var i = 0; i < v.length; i++) parts.push(tomlValue(v[i]))
+    return "[" + parts.join(", ") + "]"
+  }
+  return tomlString(v)
+}
+
+function tomlInline(table) {
+  var parts = []
+  for (var key in table) parts.push(key + " = " + tomlValue(table[key]))
+  return "{ " + parts.join(", ") + " }"
+}
+
+function serializeRules(raw) {
+  var lines = [GENERATED_HEADER,
+    "# Hand edits are fine, but comments are dropped the next time the",
+    "# visual editor saves. Field reference: rules.example.toml in the plugin.",
+    ""]
+  var rawFolders = raw && isArrayValue(raw.folder) ? raw.folder : []
+  for (var f = 0; f < rawFolders.length; f++) {
+    var folder = rawFolders[f]
+    lines.push("[[folder]]")
+    lines.push("path = " + tomlString(folder.path))
+    if (folder.recursive === true) lines.push("recursive = true")
+    if (folder.enabled === false) lines.push("enabled = false")
+    if (isArrayValue(folder.ignore)) lines.push("ignore = " + tomlValue(folder.ignore))
+    var rules = isArrayValue(folder.rule) ? folder.rule : []
+    for (var r = 0; r < rules.length; r++) {
+      var rule = rules[r]
+      lines.push("")
+      lines.push("  [[folder.rule]]")
+      lines.push("  name = " + tomlString(rule.name))
+      var groups = ["all", "any", "none"]
+      for (var g = 0; g < groups.length; g++) {
+        if (!isArrayValue(rule[groups[g]]) || rule[groups[g]].length === 0) continue
+        lines.push("  " + groups[g] + " = [")
+        for (var c = 0; c < rule[groups[g]].length; c++)
+          lines.push("    " + tomlInline(rule[groups[g]][c]) + ",")
+        lines.push("  ]")
+      }
+      lines.push("  actions = [")
+      var actions = isArrayValue(rule.actions) ? rule.actions : []
+      for (var a = 0; a < actions.length; a++)
+        lines.push("    " + tomlInline(actions[a]) + ",")
+      lines.push("  ]")
+    }
+    lines.push("")
+  }
+  return lines.join("\n")
+}
+
+// The one gate between the editor and the file: converts, validates through
+// the same compiler the engine uses, and only hands back text when the result
+// would load cleanly.
+function validateDraft(draft, home) {
+  var errors = []
+  var list = isArrayValue(draft) ? draft : []
+  if (list.length === 0) errors.push("add at least one folder")
+  for (var i = 0; i < list.length; i++) {
+    if (String(list[i].path || "").trim() === "")
+      errors.push("folder " + (i + 1) + ": path is empty")
+  }
+  if (errors.length === 0) {
+    var raw = draftToRaw(list)
+    var compiled = compileConfig(raw, home)
+    errors = compiled.errors
+    if (errors.length === 0) return { errors: [], text: serializeRules(raw) }
+  }
+  return { errors: errors, text: "" }
+}
+
 // -------------------------------------------------------------- formatting
 
 function elide(text, max) {

@@ -453,6 +453,102 @@ path = "~/A"
 check("fields: TSV parsed", Model.parseFields("state\tok\nbehind\t2\n"),
   { state: "ok", behind: "2" })
 
+// ---------------------------------------------------------------- editor
+
+{
+  const raw = Model.parseToml(RULES_TOML).value
+  const draft = Model.draftFromRaw(raw)
+  check("editor: one folder in draft", draft.length, 1)
+  check("editor: path kept as typed", draft[0].path, "~/Downloads")
+  check("editor: ignore joined for editing", draft[0].ignore, "*.iso")
+  check("editor: two rules", draft[0].rules.length, 2)
+  const shot = draft[0].rules[0]
+  check("editor: conditions flattened with group", shot.conditions,
+    [{ group: "all", field: "name", op: "starts_with", value: "screenshot" },
+     { group: "all", field: "kind", op: "is", value: "image" }])
+  check("editor: action params extracted", shot.actions,
+    [{ verb: "move", params: { to: "~/Pictures/Screenshots" } }])
+  check("editor: age value stays as typed", draft[0].rules[1].conditions[0].value, "2w")
+}
+
+{
+  // Full round trip: parse -> draft -> raw -> serialize -> parse -> compile
+  // must land on exactly the compiled config of the original file.
+  const raw1 = Model.parseToml(RULES_TOML).value
+  const draft = Model.draftFromRaw(raw1)
+  const text = Model.serializeRules(Model.draftToRaw(draft))
+  const reparsed = Model.parseToml(text)
+  ok("editor: serialized TOML reparses", reparsed.ok)
+  const before = Model.compileConfig(raw1, HOME)
+  const after = Model.compileConfig(reparsed.value, HOME)
+  check("editor: round trip preserves compiled config", after, before)
+  ok("editor: generated file carries the marker", text.indexOf("# Omazel rules — written by the visual editor.") === 0)
+}
+
+{
+  const draft = [{
+    path: "~/Vault", recursive: true, enabled: false, ignore: " *.iso , keep-* ",
+    rules: [{
+      name: "  ",
+      conditions: [
+        { group: "any", field: "extension", op: "in", value: "pdf, docx" },
+        { group: "none", field: "name", op: "contains", value: "keep" },
+      ],
+      actions: [
+        { verb: "encrypt", params: { recipient: "age1abc", identity: "~/.age/key.txt",
+          delete_original: true, verify: true } },
+        { verb: "upload", params: { via: "taildrop", device: "phone", remote: "stale", path: "stale" } },
+      ]
+    }]
+  }]
+  const raw = Model.draftToRaw(draft)
+  check("editor: ignore list split and trimmed", raw.folder[0].ignore, ["*.iso", "keep-*"])
+  check("editor: recursive/enabled emitted only off-default",
+    [raw.folder[0].recursive, raw.folder[0].enabled], [true, false])
+  check("editor: blank rule name defaulted", raw.folder[0].rule[0].name, "Untitled rule")
+  check("editor: any/none groups rebuilt",
+    [raw.folder[0].rule[0].any.length, raw.folder[0].rule[0].none.length], [1, 1])
+  check("editor: in-op value split", raw.folder[0].rule[0].any[0]["in"], ["pdf", "docx"])
+  const enc = raw.folder[0].rule[0].actions[0]
+  check("editor: default-true verify omitted", enc.verify, undefined)
+  check("editor: delete_original kept when true", enc.delete_original, true)
+  const up = raw.folder[0].rule[0].actions[1]
+  check("editor: taildrop strips rclone params", [up.remote, up.path], [undefined, undefined])
+  check("editor: taildrop keeps device", up.device, "phone")
+}
+
+{
+  const bad = Model.validateDraft([], HOME)
+  ok("editor: empty draft rejected", bad.errors.length > 0)
+  const noPath = Model.validateDraft([{ path: " ", rules: [] }], HOME)
+  ok("editor: empty path rejected", noPath.errors[0].indexOf("path is empty") >= 0)
+  const noDevice = Model.validateDraft([{
+    path: "~/A", rules: [{ name: "r", conditions: [],
+      actions: [{ verb: "upload", params: { via: "taildrop" } }] }]
+  }], HOME)
+  ok("editor: validation reuses the compiler",
+    noDevice.errors.length === 1 && noDevice.errors[0].indexOf("device") >= 0)
+  const good = Model.validateDraft([{
+    path: "~/A", rules: [{ name: "r", conditions: [{ group: "all", field: "age", op: "gt", value: "30d" }],
+      actions: [{ verb: "trash", params: {} }] }]
+  }], HOME)
+  check("editor: valid draft yields text", good.errors, [])
+  ok("editor: text is non-empty TOML", good.text.indexOf("[[folder]]") > 0)
+}
+
+{
+  check("editor: escaping survives quotes in names",
+    Model.parseToml(Model.serializeRules({ folder: [{ path: 'a"b\\c', rule: [] }] })).value.folder[0].path,
+    'a"b\\c')
+  const uploadTaildrop = Model.actionParams("upload", { via: "taildrop" }).map(p => p.key)
+  check("editor: upload params for taildrop", uploadTaildrop, ["via", "device"])
+  const uploadRclone = Model.actionParams("upload", { via: "dropbox" }).map(p => p.key)
+  check("editor: upload params for rclone", uploadRclone, ["via", "remote", "path"])
+  check("editor: number ops for size", Model.opsForField("size")[0].value, "gt")
+  check("editor: string ops for name", Model.opsForField("name")[0].value, "is")
+  check("editor: encrypt defaults verify on", Model.defaultParamsFor("encrypt"), { verify: true })
+}
+
 // ------------------------------------------------------------ formatting
 
 check("fmt: elide short", Model.elide("hello", 10), "hello")

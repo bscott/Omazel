@@ -30,6 +30,10 @@ mode that logs what rules *would* do without touching anything.
 - **Safe by default** — collision-safe naming (`report (2).pdf`), partial
   downloads ignored, settle delay before judging fresh files, loop protection
   so rules do not chew on their own output, and a global dry-run switch.
+- **Visual rule editor** — build and edit folders, rules, conditions, and
+  actions entirely from the widget popup, no TOML required. It validates
+  through the same compiler the engine uses before writing, keeps a `.bak` of
+  the previous version, and hand-written files survive the round trip.
 - **Bar widget** — engine status at a glance, per-folder pause toggles, a
   recent-activity feed, rule-file error reporting, missing-tool warnings, and
   one-click plugin updates.
@@ -43,9 +47,11 @@ omarchy plugin add https://github.com/bscott/Omazel.git --enable
 ```
 
 Then place the **Omazel** widget in your bar from the Omarchy bar settings
-(category *System*). Open the popup and hit **Create starter rules**, or copy
-[`rules.example.toml`](rules.example.toml) to `~/.config/omazel/rules.toml`
-yourself. Edits to the rules file apply automatically on save.
+(category *System*). Open the popup and either **Build rules visually** in
+the built-in editor, hit **Create starter rules** to start from the commented
+example, or copy [`rules.example.toml`](rules.example.toml) to
+`~/.config/omazel/rules.toml` yourself. Edits to the rules file apply
+automatically on save, whichever way they were made.
 
 `inotify-tools` is the one hard dependency for live watching (the sweep works
 without it): `sudo pacman -S inotify-tools`. Everything else is only needed by
@@ -136,9 +142,20 @@ verify against is a config error unless you opt out explicitly with
 | Middle click | Pause / resume the whole engine |
 
 The popup shows engine status, pause and dry-run toggles, a manual sweep
-button, a shortcut to edit the rules file, every watched folder with its own
-pause toggle, the recent activity feed (including what dry-run would have
-done), rule problems, and missing-tool warnings.
+button, the visual rule editor, a shortcut to open the rules file in your
+text editor, every watched folder with its own pause toggle, the recent
+activity feed (including what dry-run would have done), rule problems, and
+missing-tool warnings.
+
+**Edit rules** opens the visual editor: add watched folders, stack
+conditions (All / Any / None per row), pick actions from a dropdown with the
+right inputs for each one, and reorder rules and actions with the arrows —
+order matters, since the first rule that relocates a file wins. Save
+validates everything through the engine's own rule compiler first, so a
+mistake shows up as a message in the editor instead of a broken rules file;
+the previous version is kept alongside as `rules.toml.bak`. A hand-written
+file opened in the editor keeps its structure, but comments are dropped on
+save (the editor warns before that happens).
 
 ## Scripting
 

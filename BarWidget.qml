@@ -30,8 +30,17 @@ BarWidget {
   }
 
   property bool popupOpen: false
+  property bool editing: false
 
-  function close() { popupOpen = false }
+  function close() {
+    popupOpen = false
+    editing = false
+  }
+
+  function openEditor() {
+    editorView.load()
+    editing = true
+  }
 
   // The engine polls and watches on the widget's configured cadence, but the
   // shell only hands settings to widget slots, so relay them across.
@@ -122,12 +131,23 @@ BarWidget {
     bar: root.bar
     owner: root
     open: root.popupOpen
-    contentWidth: popup.fittedContentWidth(Style.space(340))
-    contentHeight: popup.fittedContentHeight(column.implicitHeight)
+    contentWidth: popup.fittedContentWidth(Style.space(root.editing ? 500 : 340))
+    contentHeight: popup.fittedContentHeight(root.editing
+      ? editorView.desiredHeight : column.implicitHeight)
+
+    Editor {
+      id: editorView
+      anchors.fill: parent
+      visible: root.editing
+      engine: root.engine
+      bar: root.bar
+      onDone: root.editing = false
+    }
 
     Column {
       id: column
       anchors.fill: parent
+      visible: !root.editing
       spacing: Style.space(10)
 
       // ------------------------------------------------------------- header
@@ -192,8 +212,17 @@ BarWidget {
         }
 
         Button {
+          text: "Edit rules"
+          tooltipText: "Open the visual rule editor"
+          foreground: root.bar.foreground
+          horizontalPadding: Style.spacing.controlPaddingX
+          verticalPadding: Style.spacing.controlPaddingY
+          onClicked: root.openEditor()
+        }
+
+        Button {
           iconText: "󰏫"
-          tooltipText: "Edit rules file"
+          tooltipText: "Open rules in text editor"
           foreground: root.bar.foreground
           horizontalPadding: Style.spacing.controlPaddingX
           verticalPadding: Style.spacing.controlPaddingY
@@ -279,7 +308,7 @@ BarWidget {
         visible: root.engine ? !root.engine.rulesFileExists : false
 
         Text {
-          text: "No rules yet. Start from the example — it opens in your editor once created."
+          text: "No rules yet. Build them visually, or start from the commented example file."
           color: Qt.darker(root.bar.foreground, 1.3)
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.caption
@@ -287,12 +316,25 @@ BarWidget {
           width: parent.width
         }
 
-        Button {
-          text: "Create starter rules"
-          foreground: root.bar.foreground
-          horizontalPadding: Style.spacing.controlPaddingX
-          verticalPadding: Style.spacing.controlPaddingY
-          onClicked: if (root.engine) root.engine.createStarterRules()
+        Row {
+          spacing: Style.space(6)
+
+          Button {
+            text: "Build rules visually"
+            foreground: root.bar.foreground
+            bordered: true
+            horizontalPadding: Style.spacing.controlPaddingX
+            verticalPadding: Style.spacing.controlPaddingY
+            onClicked: root.openEditor()
+          }
+
+          Button {
+            text: "Create starter rules"
+            foreground: root.bar.foreground
+            horizontalPadding: Style.spacing.controlPaddingX
+            verticalPadding: Style.spacing.controlPaddingY
+            onClicked: if (root.engine) root.engine.createStarterRules()
+          }
         }
       }
 

@@ -75,6 +75,16 @@ Item {
   property var configErrors: []
   property var folders: []
 
+  // The rules file exactly as last read, for the visual editor — it parses
+  // this itself so hand-written structure survives the GUI round trip.
+  property string rulesText: ""
+  property bool saving: false
+
+  // Warn the editor about clobbering hand-written commentary, but not about
+  // the header the editor itself writes.
+  readonly property bool rulesHasComments: rulesText.indexOf("# Omazel rules — written by the visual editor.") !== 0
+    && /(^|\n)[ \t]*#/.test(rulesText)
+
   readonly property int ruleCount: {
     var n = 0
     for (var i = 0; i < folders.length; i++) n += folders[i].rules.length
@@ -187,9 +197,11 @@ Item {
       configError = "No rules file at " + rulesPath
       configErrors = []
       folders = []
+      rulesText = ""
       return
     }
     rulesFileExists = true
+    rulesText = text
     var parsed = Model.parseToml(text)
     if (!parsed.ok) {
       configLoaded = false
@@ -207,6 +219,21 @@ Item {
     // A fresh config means fresh intent: evaluate everything already sitting
     // in the watched folders rather than waiting out the sweep timer.
     sweepAll()
+  }
+
+  // Writes the rules file the editor produced: previous version to .bak,
+  // new content through a temp file and rename so a crash mid-write can
+  // never leave a half-written config. The rename lands as a moved_to event
+  // on the rules watcher, which reloads for us.
+  function saveRules(text) {
+    if (saveProcess.running) return
+    saving = true
+    saveProcess.command = ["bash", "-c",
+      'set -e; dir="$(dirname -- "$2")"; mkdir -p -- "$dir"; ' +
+      'if [[ -f "$2" ]]; then cp -f -- "$2" "$2.bak"; fi; ' +
+      'tmp="$2.tmp.$$"; printf "%s" "$1" > "$tmp"; mv -f -- "$tmp" "$2"',
+      "_", text, rulesPath]
+    saveProcess.running = true
   }
 
   function createStarterRules() {
@@ -353,7 +380,7 @@ Item {
     var now = Math.floor(Date.now() / 1000)
     var plans = Model.planFile(file, folder, now)
     for (var i = 0; i < plans.length; i++) {
-      var key = plans[i].file + " " + plans[i].rule
+      var key = plans[i].file + "\u0000" + plans[i].rule
       if (_cooldown[key] !== undefined && now - _cooldown[key] < cooldownSec) continue
       _cooldown[key] = now
       if (!alreadyQueued(plans[i])) _actQueue.push(plans[i])
@@ -508,6 +535,24 @@ Item {
     stdout: StdioCollector { id: readRulesStdout; waitForEnd: true }
     onExited: function (exitCode) {
       root.applyRules(String(readRulesStdout.text || ""))
+    }
+  }
+
+  Process {
+    id: saveProcess
+    running: false
+    command: []
+    stderr: StdioCollector { id: saveStderr; waitForEnd: true }
+    onExited: function (exitCode) {
+      root.saving = false
+      if (exitCode !== 0) {
+        root.lastError = Model.elide("Saving rules failed: "
+          + String(saveStderr.text || "").split("\n").pop(), 140)
+      }
+      // The rules watcher normally catches the rename; reloading anyway
+      // covers the first save, when the config directory itself was just
+      // created and nothing was watching it yet.
+      reloadSoon.restart()
     }
   }
 
