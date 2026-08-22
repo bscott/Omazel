@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.bscott.omazel",
+  "name": "Omazel",
+  "version": "0.1.0",
+  "author": "Brian Scott",
+  "license": "MIT",
+  "description": "Hazel-style file automation for Omarchy: watch folders, match rules, and move, rename, trash, extract, encrypt, or upload files automatically.",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omazel",
+    "description": "Automated folder organization driven by rules in ~/.config/omazel/rules.toml, with pause, dry-run, and an activity feed in the bar.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "rulesPath": "~/.config/omazel/rules.toml",
+      "sweepIntervalSec": 300,
+      "settleSec": 3,
+      "cooldownSec": 60,
+      "startPaused": false,
+      "showActionCount": true,
+      "activityRows": 8,
+      "updateCheckIntervalSec": 21600
+    },
+    "schema": [
+      {
+        "key": "rulesPath",
+        "type": "string",
+        "label": "Rules file",
+        "description": "TOML file defining watched folders, rules, and actions.",
+        "defaultValue": "~/.config/omazel/rules.toml"
+      },
+      {
+        "key": "sweepIntervalSec",
+        "type": "integer",
+        "label": "Sweep interval (seconds, 0 to disable)",
+        "description": "How often to re-scan watched folders. The sweep is what fires age-based rules and catches files that arrived while the shell was off; inotify handles new arrivals instantly either way.",
+        "min": 0,
+        "max": 86400,
+        "step": 60,
+        "defaultValue": 300
+      },
+      {
+        "key": "settleSec",
+        "type": "integer",
+        "label": "Settle delay (seconds)",
+        "description": "How long a file must sit quietly after arriving before rules judge it, so downloads and copies are not caught half-written.",
+        "min": 0,
+        "max": 60,
+        "step": 1,
+        "defaultValue": 3
+      },
+      {
+        "key": "cooldownSec",
+        "type": "integer",
+        "label": "Per-file rule cooldown (seconds)",
+        "description": "Minimum time before the same rule may act on the same file again, keeping the watcher and the sweep from double-firing and failed actions from retrying in a tight loop.",
+        "min": 10,
+        "max": 3600,
+        "step": 10,
+        "defaultValue": 60
+      },
+      {
+        "key": "startPaused",
+        "type": "boolean",
+        "label": "Start paused",
+        "description": "Come up with the engine paused after every shell restart, so rules only run once you resume them.",
+        "defaultValue": false
+      },
+      {
+        "key": "showActionCount",
+        "type": "boolean",
+        "label": "Show session action count in the bar",
+        "defaultValue": true
+      },
+      {
+        "key": "activityRows",
+        "type": "integer",
+        "label": "Activity rows in the popup",
+        "min": 3,
+        "max": 20,
+        "step": 1,
+        "defaultValue": 8
+      },
+      {
+        "key": "updateCheckIntervalSec",
+        "type": "integer",
+        "label": "Check for plugin updates every (seconds, 0 to disable)",
+        "description": "How often to fetch from the plugin's git remote to see whether a newer version is available. The popup shows an update row only when there is one. Set to 0 to never check.",
+        "min": 0,
+        "max": 604800,
+        "step": 900,
+        "defaultValue": 21600
+      }
+    ]
+  }
+}
