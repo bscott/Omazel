@@ -645,7 +645,7 @@ function attachProbes(folder) {
         if (FIELDS[cond.field] !== "probe") continue
         var mode = cond.field === "script" ? "script"
           : (cond.op === "matches" ? "E" : "F")
-        var key = mode + " " + cond.value
+        var key = mode + "\u0000" + cond.value
         if (seen[key] === undefined) {
           seen[key] = folder.probes.length
           folder.probes.push({ id: seen[key], mode: mode, value: cond.value })
