@@ -253,65 +253,65 @@ BarWidget {
         }
       }
 
-      // Dry-run switch, styled like a toggle row so its state is obvious.
+      // Dry-run switch. A real ToggleSwitch anchored to the right edge, with
+      // the label column filling the space between — anchors instead of a Row
+      // so nothing can crowd or clip against the pill's border.
       BorderSurface {
         id: dryToggle
         width: parent.width
-        height: dryRow.implicitHeight + Style.space(12)
+        height: Math.max(dryColumn.implicitHeight, drySwitch.implicitHeight) + Style.space(12)
         radius: Style.spacing.labelGap
         color: root.dryRun
           ? Style.selectedFillFor(root.bar.foreground, Color.accent) : "transparent"
         borderSpec: Border.controlSpec("normal", root.bar.foreground, Color.accent)
 
-        Row {
-          id: dryRow
+        Text {
+          id: dryIcon
+          text: "󰈈"
+          color: root.dryRun ? Color.accent : root.bar.foreground
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.body
+          width: Style.space(18)
+          horizontalAlignment: Text.AlignHCenter
           anchors.left: parent.left
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
           anchors.leftMargin: dryToggle.borderLeft + Style.space(10)
-          anchors.rightMargin: dryToggle.borderRight + Style.space(10)
-          spacing: Style.space(10)
+          anchors.verticalCenter: parent.verticalCenter
+        }
+
+        ToggleSwitch {
+          id: drySwitch
+          checked: root.dryRun
+          interactive: false
+          foreground: root.bar.foreground
+          anchors.right: parent.right
+          anchors.rightMargin: dryToggle.borderRight + Style.space(8)
+          anchors.verticalCenter: parent.verticalCenter
+        }
+
+        Column {
+          id: dryColumn
+          spacing: Style.space(1)
+          anchors.left: dryIcon.right
+          anchors.leftMargin: Style.space(10)
+          anchors.right: drySwitch.left
+          anchors.rightMargin: Style.space(8)
+          anchors.verticalCenter: parent.verticalCenter
 
           Text {
-            text: "󰈈"
-            color: root.dryRun ? Color.accent : root.bar.foreground
+            text: "Dry run"
+            color: root.bar.foreground
             font.family: root.bar.fontFamily
-            font.pixelSize: Style.font.body
-            width: Style.space(18)
-            horizontalAlignment: Text.AlignHCenter
-            anchors.verticalCenter: parent.verticalCenter
-          }
-
-          Column {
-            width: parent.width - Style.space(80)
-            spacing: Style.space(1)
-            anchors.verticalCenter: parent.verticalCenter
-
-            Text {
-              text: "Dry run"
-              color: root.bar.foreground
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              font.bold: root.dryRun
-            }
-
-            Text {
-              text: "Log what rules would do, touch nothing"
-              color: Qt.darker(root.bar.foreground, 1.5)
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.caption
-            }
+            font.pixelSize: Style.font.bodySmall
+            font.bold: root.dryRun
           }
 
           Text {
-            text: root.dryRun ? "ON" : "OFF"
-            color: root.dryRun ? Color.accent : Qt.darker(root.bar.foreground, 1.5)
+            text: "Log what rules would do, touch nothing"
+            color: Qt.darker(root.bar.foreground, 1.5)
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.caption
-            font.bold: root.dryRun
-            width: Style.space(30)
-            horizontalAlignment: Text.AlignRight
-            anchors.verticalCenter: parent.verticalCenter
+            elide: Text.ElideRight
+            width: parent.width
           }
         }
 
