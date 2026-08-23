@@ -7,7 +7,7 @@
 
 set -uo pipefail
 
-for tool in inotifywait gio notify-send age tailscale rclone zip unzip 7z unrar tar; do
+for tool in inotifywait gio notify-send age tailscale rclone zip unzip 7z unrar tar file getfattr xdg-open; do
   if command -v "$tool" >/dev/null 2>&1; then
     printf '%s\t1\n' "$tool"
   else

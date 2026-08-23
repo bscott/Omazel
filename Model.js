@@ -280,14 +280,25 @@ var STRING_OPS = {
 }
 var NUMBER_OPS = { is: true, is_not: true, gt: true, lt: true, gte: true, lte: true }
 
+// Probe fields cannot be answered from a stat alone — grep, `file`, xattrs,
+// or a user script have to run against the file. They compile to per-folder
+// probes (see compileConfig) whose results arrive on the file record.
+var CONTENT_OPS = { contains: true, not_contains: true, matches: true }
+var SCRIPT_OPS = { passes: true, fails: true }
+
 var FIELDS = {
   name: "string",       // basename without extension
   fullname: "string",   // basename with extension
   extension: "string",  // lowercase, without the dot
   path: "string",       // absolute path
   kind: "string",       // image | video | audio | document | archive | code | other
+  mime: "string",       // real content type via `file --mime-type` (probe)
+  source: "string",     // download origin URL from the user.xdg.origin.url xattr (probe)
   size: "number",       // bytes
-  age: "number"         // seconds since last modification
+  age: "number",        // seconds since last modification
+  created: "number",    // seconds since birth time (falls back to mtime)
+  contents: "probe",    // text inside the file, via grep
+  script: "probe"       // arbitrary command; exit 0 = the condition holds
 }
 
 var KIND_EXTENSIONS = {
@@ -375,7 +386,7 @@ function compileCondition(raw) {
   } else {
     for (var key in raw) {
       if (key === "field") continue
-      if (STRING_OPS[key] || NUMBER_OPS[key]) {
+      if (STRING_OPS[key] || NUMBER_OPS[key] || SCRIPT_OPS[key]) {
         if (op !== null) return { error: "condition has more than one operator" }
         op = key
         value = raw[key]
@@ -385,6 +396,20 @@ function compileCondition(raw) {
   if (op === null) return { error: "condition on '" + field + "' has no operator" }
 
   var fieldType = FIELDS[field]
+
+  if (field === "contents") {
+    if (!CONTENT_OPS[op]) return { error: "operator '" + op + "' cannot apply to 'contents'" }
+    var pattern = String(value === undefined ? "" : value)
+    if (pattern === "") return { error: "contents condition needs text to look for" }
+    return { value: { field: field, op: op, value: pattern } }
+  }
+  if (field === "script") {
+    if (!SCRIPT_OPS[op]) return { error: "script conditions use 'passes' or 'fails'" }
+    var command = String(value === undefined ? "" : value)
+    if (command === "") return { error: "script condition needs a command" }
+    return { value: { field: field, op: op, value: command } }
+  }
+
   var validOps = fieldType === "number" ? NUMBER_OPS : STRING_OPS
   if (!validOps[op]) return { error: "operator '" + op + "' cannot apply to '" + field + "'" }
 
@@ -417,6 +442,7 @@ var ACTION_SPECS = {
   sort:     { required: ["into"], optional: [] },
   trash:    { required: [], optional: [] },
   "delete": { required: [], optional: [] },
+  open:     { required: [], optional: [] },
   run:      { required: ["command"], optional: [] },
   notify:   { required: [], optional: ["message"] },
   extract:  { required: [], optional: ["to", "delete_archive"] },
@@ -426,7 +452,7 @@ var ACTION_SPECS = {
   upload:   { required: ["via"], optional: ["device", "remote", "path"] }
 }
 
-var UPLOAD_PROVIDERS = { taildrop: true, dropbox: true, protondrive: true }
+var UPLOAD_PROVIDERS = { taildrop: true, dropbox: true, protondrive: true, rclone: true }
 
 function compileAction(raw, home) {
   if (typeof raw !== "object" || raw === null || isArrayValue(raw))
@@ -474,11 +500,15 @@ function compileAction(raw, home) {
   if (verb === "upload") {
     action.via = String(raw.via).toLowerCase()
     if (!UPLOAD_PROVIDERS[action.via])
-      return { error: "upload 'via' must be taildrop, dropbox, or protondrive" }
+      return { error: "upload 'via' must be taildrop, dropbox, protondrive, or rclone" }
     if (action.via === "taildrop") {
       if (raw.device === undefined) return { error: "upload via taildrop needs 'device'" }
       action.device = String(raw.device)
     } else {
+      // The named providers default the remote to their own name; the generic
+      // rclone provider has no sensible default, so it must be spelled out.
+      if (action.via === "rclone" && raw.remote === undefined)
+        return { error: "upload via rclone needs 'remote'" }
       action.remote = raw.remote !== undefined ? String(raw.remote) : action.via
       action.path = raw.path !== undefined ? String(raw.path) : ""
     }
@@ -539,6 +569,12 @@ function compileConfig(parsed, home) {
       var ruleName = rawRule && rawRule.name ? String(rawRule.name) : "rule " + (r + 1)
       var ruleWhere = where + ", " + ruleName
       var rule = { name: ruleName, all: [], any: [], none: [], actions: [] }
+      // Hazel's "continue matching rules": true keeps evaluating later rules
+      // even after this one relocates the file (the caller's responsibility to
+      // make sensible), false stops after this rule no matter what, and unset
+      // keeps the default stop-only-when-relocated behaviour.
+      if (rawRule["continue"] === true) rule.cont = "always"
+      else if (rawRule["continue"] === false) rule.cont = "never"
       var bad = false
 
       var groups = ["all", "any", "none"]
@@ -582,10 +618,58 @@ function compileConfig(parsed, home) {
       folder.rules.push(rule)
     }
 
+    attachProbes(folder)
     folders.push(folder)
   }
 
   return { folders: folders, errors: errors }
+}
+
+// Walks a folder's compiled conditions and works out what the per-file probe
+// has to gather: birth time, mime type, origin xattr, and one grep or script
+// run per distinct contents/script condition. Identical probes are shared so
+// two rules greping for the same text cost one grep.
+function attachProbes(folder) {
+  folder.probes = []
+  folder.probeNeeds = { btime: false, mime: false, source: false }
+  var seen = {}
+  for (var r = 0; r < folder.rules.length; r++) {
+    var rule = folder.rules[r]
+    var groups = [rule.all, rule.any, rule.none]
+    for (var g = 0; g < groups.length; g++) {
+      for (var c = 0; c < groups[g].length; c++) {
+        var cond = groups[g][c]
+        if (cond.field === "created") folder.probeNeeds.btime = true
+        if (cond.field === "mime") folder.probeNeeds.mime = true
+        if (cond.field === "source") folder.probeNeeds.source = true
+        if (FIELDS[cond.field] !== "probe") continue
+        var mode = cond.field === "script" ? "script"
+          : (cond.op === "matches" ? "E" : "F")
+        var key = mode + " " + cond.value
+        if (seen[key] === undefined) {
+          seen[key] = folder.probes.length
+          folder.probes.push({ id: seen[key], mode: mode, value: cond.value })
+        }
+        cond.probeId = seen[key]
+      }
+    }
+  }
+  folder.needsProbe = folder.probes.length > 0 || folder.probeNeeds.btime
+    || folder.probeNeeds.mime || folder.probeNeeds.source
+}
+
+// The extra arguments omazel-probe.sh needs for this folder's rules, beyond
+// the stat every file gets.
+function probeArgs(folder) {
+  var out = []
+  if (folder.probeNeeds && folder.probeNeeds.mime) out.push("--mime")
+  if (folder.probeNeeds && folder.probeNeeds.source) out.push("--source")
+  var probes = folder.probes || []
+  for (var i = 0; i < probes.length; i++) {
+    if (probes[i].mode === "script") out.push("--script", String(probes[i].id), probes[i].value)
+    else out.push("--grep", probes[i].mode, String(probes[i].id), probes[i].value)
+  }
+  return out
 }
 
 // --------------------------------------------------------------- matching
@@ -609,18 +693,43 @@ function fileRecord(path, sizeBytes, mtimeSec) {
   }
 }
 
-function conditionValue(file, field, nowSec) {
-  if (field === "name") return file.name.toLowerCase()
-  if (field === "fullname") return file.fullname.toLowerCase()
+// Field value with original casing, for regex capture extraction — a capture
+// used in a rename should keep the case the filename actually has.
+function rawConditionValue(file, field) {
+  if (field === "name") return file.name
+  if (field === "fullname") return file.fullname
   if (field === "extension") return file.ext
-  if (field === "path") return file.path.toLowerCase()
+  if (field === "path") return file.path
   if (field === "kind") return kindOf(file.ext)
-  if (field === "size") return file.size
-  if (field === "age") return Math.max(0, nowSec - file.mtimeSec)
+  if (field === "mime") return String(file.mime || "")
+  if (field === "source") return String(file.source || "")
   return ""
 }
 
+function conditionValue(file, field, nowSec) {
+  if (field === "size") return file.size
+  if (field === "age") return Math.max(0, nowSec - file.mtimeSec)
+  if (field === "created") {
+    // Not every filesystem records birth time; mtime is the honest fallback
+    // and matches what `age` would say for an untouched file.
+    var born = file.btimeSec > 0 ? file.btimeSec : file.mtimeSec
+    return Math.max(0, nowSec - born)
+  }
+  return rawConditionValue(file, field).toLowerCase()
+}
+
 function matchCondition(file, cond, nowSec) {
+  if (FIELDS[cond.field] === "probe") {
+    // Probe results are computed outside the matcher (grep, `file`, or the
+    // user's script) and delivered on the record. A missing result means the
+    // probe could not run, which must read as "did not match" for positive
+    // and negative operators alike — inverting an unknown would invent a hit.
+    var probes = file.probes || {}
+    if (probes[cond.probeId] === undefined) return false
+    var hit = probes[cond.probeId] === true
+    return (cond.op === "not_contains" || cond.op === "fails") ? !hit : hit
+  }
+
   var actual = conditionValue(file, cond.field, nowSec)
 
   if (FIELDS[cond.field] === "number") {
@@ -670,10 +779,34 @@ function ruleMatches(file, rule, nowSec) {
 
 // --------------------------------------------------------------- planning
 
+// Capture groups from the rule's first successful `matches` condition, made
+// available to patterns as {1}, {2}, … and {0} for the whole match — Hazel's
+// custom match tokens. Extracted against the original-case field value so a
+// captured "Invoice" does not come out as "invoice".
+function ruleCaptures(file, rule) {
+  var groups = [rule.all, rule.any]
+  for (var g = 0; g < groups.length; g++) {
+    for (var c = 0; c < groups[g].length; c++) {
+      var cond = groups[g][c]
+      if (cond.op !== "matches" || FIELDS[cond.field] !== "string") continue
+      var m
+      try { m = new RegExp(cond.value, "i").exec(rawConditionValue(file, cond.field)) }
+      catch (e) { continue }
+      if (!m) continue
+      var out = {}
+      for (var i = 0; i < m.length && i <= 9; i++) {
+        out[String(i)] = m[i] === undefined ? "" : String(m[i])
+      }
+      return out
+    }
+  }
+  return {}
+}
+
 // Expands the {tokens} a pattern may carry. Date tokens come from the file's
 // own mtime so "sort into {year}/{month}" files things by when they arrived,
 // not by when the rule happened to run.
-function expandPattern(pattern, file, nowSec) {
+function expandPattern(pattern, file, nowSec, captures) {
   var when = file.mtimeSec > 0 ? file.mtimeSec : nowSec
   var d = new Date(when * 1000)
   var pad = function (n) { return (n < 10 ? "0" : "") + n }
@@ -688,15 +821,18 @@ function expandPattern(pattern, file, nowSec) {
     date: d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()),
     time: pad(d.getHours()) + "-" + pad(d.getMinutes())
   }
-  return String(pattern).replace(/\{(\w+)\}/g, function (m, key) {
-    return tokens[key] !== undefined ? tokens[key] : m
+  if (captures) {
+    for (var key in captures) tokens[key] = captures[key]
+  }
+  return String(pattern).replace(/\{(\w+)\}/g, function (m, token) {
+    return tokens[token] !== undefined ? tokens[token] : m
   })
 }
 
 // A rename pattern that produced no extension keeps the original one, so
 // "{date} {name}" does what people mean without them having to remember {ext}.
-function expandRename(pattern, file, nowSec) {
-  var out = expandPattern(pattern, file, nowSec)
+function expandRename(pattern, file, nowSec, captures) {
+  var out = expandPattern(pattern, file, nowSec, captures)
   if (file.ext !== "" && out.lastIndexOf(".") <= 0) out += "." + file.ext
   return out
 }
@@ -705,12 +841,12 @@ function expandRename(pattern, file, nowSec) {
 // plan is { verb, argv, summary, relocates }: argv is exactly what the script
 // receives after its own path, and relocates marks actions after which the
 // file is no longer at its original path.
-function buildPlan(action, file, nowSec) {
+function buildPlan(action, file, nowSec, captures) {
   var verb = action.verb
 
   if (verb === "move" || verb === "copy") {
-    var destDir = expandPattern(action.to, file, nowSec)
-    var newName = action.as !== undefined ? expandRename(action.as, file, nowSec) : ""
+    var destDir = expandPattern(action.to, file, nowSec, captures)
+    var newName = action.as !== undefined ? expandRename(action.as, file, nowSec, captures) : ""
     return {
       verb: verb,
       argv: [verb, file.path, destDir, newName],
@@ -719,12 +855,12 @@ function buildPlan(action, file, nowSec) {
     }
   }
   if (verb === "rename") {
-    var renamed = expandRename(action.pattern, file, nowSec)
+    var renamed = expandRename(action.pattern, file, nowSec, captures)
     return { verb: verb, argv: ["rename", file.path, renamed],
       summary: "Rename to " + renamed, relocates: true }
   }
   if (verb === "sort") {
-    var sub = expandPattern(action.into, file, nowSec)
+    var sub = expandPattern(action.into, file, nowSec, captures)
     return { verb: "move", argv: ["move", file.path, file.dir + "/" + sub, ""],
       summary: "Sort into " + sub + "/", relocates: true }
   }
@@ -734,26 +870,31 @@ function buildPlan(action, file, nowSec) {
   if (verb === "delete") {
     return { verb: verb, argv: ["delete", file.path], summary: "Delete", relocates: true }
   }
+  if (verb === "open") {
+    return { verb: verb, argv: ["open", file.path], summary: "Open", relocates: false }
+  }
   if (verb === "run") {
     return { verb: verb, argv: ["run", file.path, action.command],
       summary: "Run: " + action.command, relocates: false }
   }
   if (verb === "notify") {
     var message = expandPattern(action.message !== undefined ? action.message : "{fullname}",
-      file, nowSec)
+      file, nowSec, captures)
     return { verb: verb, argv: ["notify", file.path, message],
       summary: "Notify", relocates: false }
   }
   if (verb === "extract") {
-    var extractTo = action.to !== undefined ? expandPattern(action.to, file, nowSec) : file.dir
+    var extractTo = action.to !== undefined
+      ? expandPattern(action.to, file, nowSec, captures) : file.dir
     return { verb: verb,
       argv: ["extract", file.path, extractTo, action.deleteArchive ? "1" : "0"],
       summary: "Extract to " + extractTo, relocates: action.deleteArchive === true }
   }
   if (verb === "compress") {
-    var zipDir = action.to !== undefined ? expandPattern(action.to, file, nowSec) : file.dir
+    var zipDir = action.to !== undefined
+      ? expandPattern(action.to, file, nowSec, captures) : file.dir
     var zipName = action.name !== undefined
-      ? expandPattern(action.name, file, nowSec) : file.fullname + ".zip"
+      ? expandPattern(action.name, file, nowSec, captures) : file.fullname + ".zip"
     return { verb: verb, argv: ["compress", file.path, zipDir, zipName],
       summary: "Compress to " + zipName, relocates: false }
   }
@@ -780,23 +921,27 @@ function buildPlan(action, file, nowSec) {
 
 // The heart of the engine: one observed file in, an ordered list of action
 // plans out. Rules run top-down; once a matching rule relocates the file,
-// later rules no longer apply because the file they would examine is gone.
+// later rules no longer apply because the file they would examine is gone —
+// unless the rule says `continue = true`, or says `continue = false` to stop
+// even without relocating.
 function planFile(file, folder, nowSec) {
   var out = []
   if (matchesAnyGlob(file.fullname, folder.ignore)) return out
   for (var r = 0; r < folder.rules.length; r++) {
     var rule = folder.rules[r]
     if (!ruleMatches(file, rule, nowSec)) continue
+    var captures = ruleCaptures(file, rule)
     var relocated = false
     for (var a = 0; a < rule.actions.length; a++) {
-      var plan = buildPlan(rule.actions[a], file, nowSec)
+      var plan = buildPlan(rule.actions[a], file, nowSec, captures)
       if (plan === null) continue
       plan.rule = rule.name
       plan.file = file.path
       out.push(plan)
       if (plan.relocates) relocated = true
     }
-    if (relocated) break
+    if (rule.cont === "never") break
+    if (relocated && rule.cont !== "always") break
   }
   return out
 }
@@ -808,6 +953,8 @@ function planFile(file, folder, nowSec) {
 function requiredTools(folders) {
   var need = { inotifywait: "watching folders" }
   for (var f = 0; f < folders.length; f++) {
+    if (folders[f].probeNeeds && folders[f].probeNeeds.mime) need["file"] = "mime conditions"
+    if (folders[f].probeNeeds && folders[f].probeNeeds.source) need["getfattr"] = "source conditions"
     for (var r = 0; r < folders[f].rules.length; r++) {
       var actions = folders[f].rules[r].actions
       for (var a = 0; a < actions.length; a++) {
@@ -816,6 +963,7 @@ function requiredTools(folders) {
         if (action.verb === "notify") need["notify-send"] = "notify action"
         if (action.verb === "extract") need["unzip"] = "extract action"
         if (action.verb === "compress") need["zip"] = "compress action"
+        if (action.verb === "open") need["xdg-open"] = "open action"
         if (action.verb === "encrypt") {
           need["age"] = "encrypt action"
           if (action.deleteOriginal) need["gio"] = "trashing encrypted originals"
@@ -896,8 +1044,13 @@ var FIELD_OPTIONS = [
   { value: "extension", label: "Extension" },
   { value: "kind", label: "Kind" },
   { value: "path", label: "Path" },
+  { value: "mime", label: "MIME type" },
+  { value: "source", label: "Source URL" },
   { value: "size", label: "Size" },
-  { value: "age", label: "Age" }
+  { value: "age", label: "Age" },
+  { value: "created", label: "Created" },
+  { value: "contents", label: "Contents" },
+  { value: "script", label: "Script" }
 ]
 
 var GROUP_OPTIONS = [
@@ -927,7 +1080,20 @@ var NUMBER_OP_OPTIONS = [
   { value: "is_not", label: "not exactly" }
 ]
 
+var CONTENT_OP_OPTIONS = [
+  { value: "contains", label: "contains" },
+  { value: "not_contains", label: "doesn't contain" },
+  { value: "matches", label: "matches regex" }
+]
+
+var SCRIPT_OP_OPTIONS = [
+  { value: "passes", label: "passes (exit 0)" },
+  { value: "fails", label: "fails (non-zero)" }
+]
+
 function opsForField(field) {
+  if (field === "contents") return CONTENT_OP_OPTIONS
+  if (field === "script") return SCRIPT_OP_OPTIONS
   return FIELDS[field] === "number" ? NUMBER_OP_OPTIONS : STRING_OP_OPTIONS
 }
 
@@ -938,6 +1104,7 @@ var ACTION_OPTIONS = [
   { value: "sort", label: "Sort into subfolder" },
   { value: "trash", label: "Move to trash" },
   { value: "delete", label: "Delete" },
+  { value: "open", label: "Open" },
   { value: "extract", label: "Extract archive" },
   { value: "compress", label: "Compress" },
   { value: "notify", label: "Send notification" },
@@ -946,11 +1113,21 @@ var ACTION_OPTIONS = [
   { value: "upload", label: "Upload / send" }
 ]
 
+var CONTINUE_OPTIONS = [
+  { value: "auto", label: "Stop if file was relocated (default)" },
+  { value: "always", label: "Always keep matching later rules" },
+  { value: "never", label: "Stop after this rule" }
+]
+
 function valuePlaceholder(field, op) {
   if (field === "size") return "e.g. 10 MB"
-  if (field === "age") return "e.g. 30d or 2w"
+  if (field === "age" || field === "created") return "e.g. 30d or 2w"
+  if (field === "contents") return op === "matches" ? "regex to grep for" : "text to find in the file"
+  if (field === "script") return "command — file passed as $1"
+  if (field === "mime") return "e.g. application/pdf"
+  if (field === "source") return "e.g. mybank.com"
   if (op === "in" || op === "not_in") return "comma-separated: pdf, docx"
-  if (op === "matches") return "regular expression"
+  if (op === "matches") return "regex — captures usable as {1}, {2}"
   if (field === "kind") return "image, video, document, archive…"
   return "value"
 }
@@ -993,11 +1170,16 @@ function actionParams(verb, params) {
     var out = [{ key: "via", label: "Send via", type: "choice", options: [
       { value: "taildrop", label: "Taildrop" },
       { value: "dropbox", label: "Dropbox (rclone)" },
-      { value: "protondrive", label: "Proton Drive (rclone)" }
+      { value: "protondrive", label: "Proton Drive (rclone)" },
+      { value: "rclone", label: "Any rclone remote" }
     ] }]
     var via = params && params.via !== undefined ? String(params.via) : "taildrop"
     if (via === "taildrop") {
       out.push({ key: "device", label: "Device", type: "text", placeholder: "phone", required: true })
+    } else if (via === "rclone") {
+      out.push({ key: "remote", label: "rclone remote", type: "text",
+        placeholder: "any configured remote", required: true })
+      out.push({ key: "path", label: "Remote path", type: "text", placeholder: "Inbox" })
     } else {
       out.push({ key: "remote", label: "rclone remote", type: "text", placeholder: via })
       out.push({ key: "path", label: "Remote path", type: "text", placeholder: "Inbox" })
@@ -1022,7 +1204,8 @@ function newDraftAction() {
 }
 
 function newDraftRule() {
-  return { name: "New rule", conditions: [newDraftCondition()], actions: [newDraftAction()] }
+  return { name: "New rule", cont: "auto",
+    conditions: [newDraftCondition()], actions: [newDraftAction()] }
 }
 
 function newDraftFolder() {
@@ -1041,7 +1224,7 @@ function rawConditionToDraft(c) {
   } else {
     for (var key in c) {
       if (key === "field") continue
-      if (STRING_OPS[key] || NUMBER_OPS[key]) { op = key; value = c[key]; break }
+      if (STRING_OPS[key] || NUMBER_OPS[key] || SCRIPT_OPS[key]) { op = key; value = c[key]; break }
     }
   }
   if (op !== null) d.op = op
@@ -1071,6 +1254,7 @@ function draftFromRaw(raw) {
       if (typeof rr !== "object" || rr === null) continue
       var rule = {
         name: rr.name !== undefined ? String(rr.name) : "Rule " + (r + 1),
+        cont: rr["continue"] === true ? "always" : (rr["continue"] === false ? "never" : "auto"),
         conditions: [],
         actions: []
       }
@@ -1132,6 +1316,8 @@ function draftToRaw(draft) {
     for (var r = 0; r < rules.length; r++) {
       var dr = rules[r]
       var rule = { name: String(dr.name || "").trim() || "Untitled rule" }
+      if (dr.cont === "always") rule["continue"] = true
+      else if (dr.cont === "never") rule["continue"] = false
       var conds = isArrayValue(dr.conditions) ? dr.conditions : []
       for (var c = 0; c < conds.length; c++) {
         var dc = conds[c]
@@ -1220,6 +1406,8 @@ function serializeRules(raw) {
       lines.push("")
       lines.push("  [[folder.rule]]")
       lines.push("  name = " + tomlString(rule.name))
+      if (rule["continue"] === true) lines.push("  continue = true")
+      else if (rule["continue"] === false) lines.push("  continue = false")
       var groups = ["all", "any", "none"]
       for (var g = 0; g < groups.length; g++) {
         if (!isArrayValue(rule[groups[g]]) || rule[groups[g]].length === 0) continue
@@ -1286,7 +1474,7 @@ function fmtSize(bytes) {
 
 var VERB_ICONS = {
   move: "󰉒", copy: "󰆏", rename: "󰑕", trash: "󰩹", "delete": "󰆴",
-  run: "󰑮", notify: "󰂚", extract: "󰀼", compress: "󰗄",
+  open: "󰏌", run: "󰑮", notify: "󰂚", extract: "󰀼", compress: "󰗄",
   encrypt: "󰌾", upload: "󰅧"
 }
 
@@ -1297,7 +1485,7 @@ function verbIcon(verb) {
 function verbLabel(verb) {
   var labels = {
     move: "Moved", copy: "Copied", rename: "Renamed", trash: "Trashed",
-    "delete": "Deleted", run: "Ran command", notify: "Notified",
+    "delete": "Deleted", open: "Opened", run: "Ran command", notify: "Notified",
     extract: "Extracted", compress: "Compressed", encrypt: "Encrypted",
     upload: "Uploaded"
   }

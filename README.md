@@ -16,8 +16,13 @@ mode that logs what rules *would* do without touching anything.
   periodic sweep that fires age-based rules and catches files that arrived
   while the shell was off.
 - **Hazel-style rules** — ordered rules per folder with `all` / `any` / `none`
-  condition groups over name, extension, kind, size, age, and path; first
-  rule that relocates a file wins.
+  condition groups over name, extension, kind, size, age, created date, path,
+  real MIME type, download source URL, file contents, and arbitrary script
+  checks; first rule that relocates a file wins (overridable per rule with
+  `continue`).
+- **Regex capture tokens** — a `matches` condition exposes its capture groups
+  to every pattern in the rule as `{1}`, `{2}`, … so
+  `^Invoice-(\d{4})` can file into `~/Documents/Invoices/{1}`.
 - **Actions** — move, copy, rename, sort into subfolders, trash, delete,
   extract archives, compress, desktop notifications, and run arbitrary
   commands.
@@ -55,9 +60,10 @@ automatically on save, whichever way they were made.
 
 `inotify-tools` is the one hard dependency for live watching (the sweep works
 without it): `sudo pacman -S inotify-tools`. Everything else is only needed by
-the actions you actually use — `age`, `tailscale`, `rclone`, `zip`/`unzip`,
-`7zip`, `unrar` — and the popup tells you if a rule needs a tool that is
-missing.
+the rules you actually write — `age`, `tailscale`, `rclone`, `zip`/`unzip`,
+`7zip`, `unrar` for actions; `file` for `mime` conditions and `getfattr`
+(package `attr`) for `source` conditions — and the popup tells you if a rule
+needs a tool that is missing.
 
 ## Rules
 
@@ -94,12 +100,42 @@ rules are skipped for it.
 | `extension` | lowercase, no dot | same as `name` |
 | `path` | absolute path | same as `name` |
 | `kind` | `image`, `video`, `audio`, `document`, `archive`, `code`, `other` | same as `name` |
+| `mime` | real content type via `file --mime-type`, e.g. `application/pdf` | same as `name` |
+| `source` | URL the file was downloaded from (browsers and wget record it in the `user.xdg.origin.url` xattr) | same as `name` |
 | `size` | file size — values like `"500 KB"`, `"10 MB"`, `"1.5gb"` | `is`, `is_not`, `gt`, `lt`, `gte`, `lte` |
 | `age` | time since last modification — `"45s"`, `"90m"`, `"12h"`, `"14d"`, `"2w"`, bare number = days | same as `size` |
+| `created` | time since the file was created (birth time; falls back to mtime where the filesystem has none) | same as `size` |
+| `contents` | text inside the file, via grep | `contains`, `not_contains`, `matches` |
+| `script` | any command — the file is passed as `$1` and `$OMAZEL_FILE` | `passes` (exit 0), `fails` |
 
 String matching ignores case. Group conditions with `all` (every), `any` (at
 least one), and `none` (none); a rule with no conditions matches every file,
 which makes a deliberate catch-all possible at the bottom of a folder.
+
+`mime`, `source`, `contents`, `created`, and `script` conditions run a small
+per-file probe; results are cached by path, size, and mtime so periodic sweeps
+only re-probe files that changed.
+
+A rule may also set `continue`: `true` keeps evaluating later rules even after
+this one relocates the file, `false` stops after this rule matches no matter
+what, and leaving it unset keeps the default — stop only once a rule has
+moved, renamed, trashed, or deleted the file.
+
+Example — the classic Hazel showcase, all in one rule:
+
+```toml
+  [[folder.rule]]
+  name = "File bank statements"
+  all = [
+    { field = "mime", is = "application/pdf" },
+    { field = "source", contains = "mybank.com" },
+    { field = "contents", contains = "Account Statement" },
+    { field = "name", matches = "statement-(\\d{4})-(\\d{2})" },
+  ]
+  actions = [
+    { do = "move", to = "~/Documents/Bank/{1}", as = "{1}-{2} statement.pdf" },
+  ]
+```
 
 ### Actions
 
@@ -110,6 +146,7 @@ which makes a deliberate catch-all possible at the bottom of a folder.
 { do = "sort", into = "{ext}" }                     # subfolder of the watched dir
 { do = "trash" }                                    # gio trash — recoverable
 { do = "delete" }                                   # permanent; prefer trash
+{ do = "open" }                                     # xdg-open with the default app
 { do = "extract", delete_archive = true }           # zip/tar/7z/rar, tarbomb-safe
 { do = "compress", name = "{name}.zip" }
 { do = "notify", message = "Filed {fullname}" }
@@ -118,11 +155,15 @@ which makes a deliberate catch-all possible at the bottom of a folder.
 { do = "upload", via = "taildrop", device = "phone" }
 { do = "upload", via = "dropbox", path = "Inbox" }              # rclone remote "dropbox:"
 { do = "upload", via = "protondrive", remote = "proton", path = "Backups" }
+{ do = "upload", via = "rclone", remote = "s3-backup", path = "drop" }   # any rclone remote
 ```
 
 Patterns expand `{name}` `{ext}` `{fullname}` `{date}` `{year}` `{month}`
 `{day}` `{time}` `{folder}`, with dates taken from the file's own modification
-time — so `to = "~/Documents/{year}"` files things by when they arrived.
+time — so `to = "~/Documents/{year}"` files things by when they arrived. When
+the rule has a `matches` condition, its capture groups are available too:
+`{1}` through `{9}`, and `{0}` for the whole match, with the original casing
+of the filename preserved.
 
 ### Encryption safety
 

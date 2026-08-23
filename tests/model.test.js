@@ -453,6 +453,199 @@ path = "~/A"
 check("fields: TSV parsed", Model.parseFields("state\tok\nbehind\t2\n"),
   { state: "ok", behind: "2" })
 
+// ----------------------------------------------------- hazel-parity fields
+
+{
+  const cfg = Model.compileConfig(Model.parseToml(`
+[[folder]]
+path = "~/Downloads"
+  [[folder.rule]]
+  name = "bank statements"
+  all = [
+    { field = "mime", is = "application/pdf" },
+    { field = "source", contains = "mybank.com" },
+    { field = "contents", contains = "Account Statement" },
+    { field = "created", lt = "7d" },
+    { field = "script", passes = "test -s" },
+  ]
+  actions = [{ do = "move", to = "~/Documents/Bank" }]
+
+  [[folder.rule]]
+  name = "same grep shared"
+  all = [{ field = "contents", contains = "Account Statement" }]
+  actions = [{ do = "notify" }]
+`).value, HOME)
+  check("probe: config compiles clean", cfg.errors, [])
+  const folder = cfg.folders[0]
+  check("probe: needs flags set", folder.probeNeeds, { btime: true, mime: true, source: true })
+  ok("probe: needsProbe", folder.needsProbe === true)
+  check("probe: identical greps share one probe", folder.probes.length, 2)
+  check("probe: modes", folder.probes.map(p => p.mode), ["F", "script"])
+  check("probe: shared id across rules",
+    folder.rules[0].all[2].probeId, folder.rules[1].all[0].probeId)
+  check("probe: args built", Model.probeArgs(folder),
+    ["--mime", "--source", "--grep", "F", "0", "Account Statement", "--script", "1", "test -s"])
+
+  const NOW2 = 1755900000
+  const rec = Model.fileRecord("/home/user/Downloads/statement.pdf", 1000, NOW2 - 3600)
+  rec.btimeSec = NOW2 - 3600
+  rec.mime = "application/PDF"
+  rec.source = "https://www.MyBank.com/statements/8823"
+  rec.probes = { "0": true, "1": true }
+  check("probe: full rule matches with probe data",
+    Model.planFile(rec, folder, NOW2).map(p => p.verb), ["move"])
+
+  rec.mime = "text/plain"
+  check("probe: second rule alone when first misses on mime",
+    Model.planFile(rec, folder, NOW2).map(p => p.verb), ["notify"])
+  rec.mime = "application/PDF"
+
+  rec.probes = { "0": false, "1": true }
+  check("probe: grep miss blocks both rules", Model.planFile(rec, folder, NOW2), [])
+
+  rec.probes = {}
+  check("probe: missing probe result never matches", Model.planFile(rec, folder, NOW2), [])
+}
+
+{
+  const negFolder = Model.compileConfig(Model.parseToml(`
+[[folder]]
+path = "~/A"
+  [[folder.rule]]
+  name = "neg"
+  all = [
+    { field = "contents", not_contains = "DRAFT" },
+    { field = "script", fails = "false" },
+  ]
+  actions = [{ do = "notify" }]
+`).value, HOME).folders[0]
+  const rec = Model.fileRecord("/home/user/A/x.txt", 1, 1)
+  rec.probes = { "0": false, "1": false }
+  check("probe: negative ops invert known results",
+    Model.planFile(rec, negFolder, 10).length, 1)
+  rec.probes = {}
+  check("probe: negative ops do not invert unknowns",
+    Model.planFile(rec, negFolder, 10), [])
+}
+
+{
+  const NOW3 = 1755900000
+  const cond = Model.compileCondition({ field: "created", gt: "30d" }).value
+  const oldBirth = Model.fileRecord("/a/f.txt", 1, NOW3 - 60)
+  oldBirth.btimeSec = NOW3 - 40 * 86400
+  ok("created: uses btime when present", Model.matchCondition(oldBirth, cond, NOW3))
+  const noBirth = Model.fileRecord("/a/f.txt", 1, NOW3 - 60)
+  noBirth.btimeSec = 0
+  ok("created: falls back to mtime", !Model.matchCondition(noBirth, cond, NOW3))
+  ok("contents: empty pattern rejected",
+    Model.compileCondition({ field: "contents", contains: "" }).error !== undefined)
+  ok("script: wrong op rejected",
+    Model.compileCondition({ field: "script", contains: "x" }).error !== undefined)
+}
+
+// ------------------------------------------------------------ capture groups
+
+{
+  const folder = Model.compileConfig(Model.parseToml(`
+[[folder]]
+path = "~/Downloads"
+  [[folder.rule]]
+  name = "file invoices"
+  all = [{ field = "name", matches = "^Invoice-(\\\\d{4})-(\\\\d+)" }]
+  actions = [
+    { do = "move", to = "~/Documents/Invoices/{1}", as = "{2} {name}" },
+    { do = "notify", message = "Filed {0}" },
+  ]
+`).value, HOME).folders[0]
+  const rec = Model.fileRecord("/home/user/Downloads/Invoice-2026-042 Acme.pdf", 1, 1755900000)
+  const plans = Model.planFile(rec, folder, 1755900000)
+  check("captures: year capture in destination", plans[0].argv[2], "/home/user/Documents/Invoices/2026")
+  check("captures: number capture in rename", plans[0].argv[3], "042 Invoice-2026-042 Acme.pdf")
+  check("captures: whole match as {0}", plans[1].argv[2], "Filed Invoice-2026-042")
+}
+
+{
+  const rec = Model.fileRecord("/a/Report FINAL.pdf", 1, 1)
+  const rule = Model.compileConfig(Model.parseToml(`
+[[folder]]
+path = "/a"
+  [[folder.rule]]
+  name = "case"
+  all = [{ field = "name", matches = "report (\\\\w+)" }]
+  actions = [{ do = "rename", pattern = "{1}" }]
+`).value, HOME).folders[0]
+  check("captures: original case preserved",
+    Model.planFile(rec, rule, 10)[0].argv[2], "FINAL.pdf")
+}
+
+// ------------------------------------------------------------- continue flag
+
+{
+  const folder = Model.compileConfig(Model.parseToml(`
+[[folder]]
+path = "/a"
+  [[folder.rule]]
+  name = "copy and continue"
+  continue = true
+  actions = [{ do = "move", to = "/b" }]
+  [[folder.rule]]
+  name = "hard stop"
+  continue = false
+  actions = [{ do = "notify" }]
+  [[folder.rule]]
+  name = "never reached"
+  actions = [{ do = "trash" }]
+`).value, HOME).folders[0]
+  const rec = Model.fileRecord("/a/x.txt", 1, 1)
+  check("continue: always passes a relocation, never stops without one",
+    Model.planFile(rec, folder, 10).map(p => p.verb), ["move", "notify"])
+}
+
+// -------------------------------------------------------- open and rclone
+
+{
+  const cfg = Model.compileConfig(Model.parseToml(`
+[[folder]]
+path = "/a"
+  [[folder.rule]]
+  name = "r"
+  actions = [
+    { do = "open" },
+    { do = "upload", via = "rclone", remote = "s3-backup", path = "drop" },
+  ]
+`).value, HOME)
+  check("rclone: generic provider compiles", cfg.errors, [])
+  const plans = Model.planFile(Model.fileRecord("/a/x.txt", 1, 1), cfg.folders[0], 10)
+  check("open: plan argv", plans[0].argv, ["open", "/a/x.txt"])
+  check("rclone: argv uses named remote", plans[1].argv,
+    ["upload", "/a/x.txt", "rclone", "s3-backup", "drop"])
+  const missingRemote = Model.compileConfig(Model.parseToml(`
+[[folder]]
+path = "/a"
+  [[folder.rule]]
+  name = "r"
+  actions = [{ do = "upload", via = "rclone" }]
+`).value, HOME)
+  ok("rclone: remote required", missingRemote.errors[0].indexOf("remote") >= 0)
+}
+
+{
+  const cfg = Model.compileConfig(Model.parseToml(`
+[[folder]]
+path = "/a"
+  [[folder.rule]]
+  name = "r"
+  all = [
+    { field = "mime", is = "application/pdf" },
+    { field = "source", contains = "x" },
+  ]
+  actions = [{ do = "open" }]
+`).value, HOME)
+  const tools = Model.requiredTools(cfg.folders).map(t => t.tool).sort()
+  check("tools: probe fields and open covered", tools,
+    ["file", "getfattr", "inotifywait", "xdg-open"])
+}
+
 // ---------------------------------------------------------------- editor
 
 {
@@ -534,6 +727,41 @@ check("fields: TSV parsed", Model.parseFields("state\tok\nbehind\t2\n"),
   }], HOME)
   check("editor: valid draft yields text", good.errors, [])
   ok("editor: text is non-empty TOML", good.text.indexOf("[[folder]]") > 0)
+}
+
+{
+  // Editor round trip for the new field and rule types.
+  const raw1 = Model.parseToml(`
+[[folder]]
+path = "~/Downloads"
+  [[folder.rule]]
+  name = "probes"
+  continue = true
+  all = [
+    { field = "contents", contains = "statement" },
+    { field = "script", passes = "test -s" },
+    { field = "created", lt = "7d" },
+  ]
+  actions = [{ do = "upload", via = "rclone", remote = "s3", path = "in" }, { do = "open" }]
+`).value
+  const draft = Model.draftFromRaw(raw1)
+  check("editor: continue mapped to draft", draft[0].rules[0].cont, "always")
+  check("editor: script condition editable",
+    draft[0].rules[0].conditions[1], { group: "all", field: "script", op: "passes", value: "test -s" })
+  const text = Model.serializeRules(Model.draftToRaw(draft))
+  const before = Model.compileConfig(raw1, HOME)
+  const after = Model.compileConfig(Model.parseToml(text).value, HOME)
+  check("editor: probe/continue round trip", after, before)
+  const contOpts = Model.CONTINUE_OPTIONS.map(o => o.value)
+  check("editor: continue options", contOpts, ["auto", "always", "never"])
+  check("editor: ops for script", Model.opsForField("script").map(o => o.value), ["passes", "fails"])
+  check("editor: ops for contents", Model.opsForField("contents").map(o => o.value),
+    ["contains", "not_contains", "matches"])
+  ok("editor: new fields listed",
+    Model.FIELD_OPTIONS.some(f => f.value === "source") && Model.FIELD_OPTIONS.some(f => f.value === "contents"))
+  const rcloneParams = Model.actionParams("upload", { via: "rclone" })
+  check("editor: rclone remote required in UI",
+    rcloneParams.filter(p => p.key === "remote")[0].required, true)
 }
 
 {

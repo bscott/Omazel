@@ -154,6 +154,15 @@ case "$VERB" in
     ok "" "deleted"
     ;;
 
+  open)
+    command -v xdg-open >/dev/null 2>&1 || fail "xdg-open is not installed"
+    [[ $DRY == 1 ]] && dryrun "" "would open"
+    # Detached: xdg-open hands off to the desktop opener, and whatever it
+    # launches must not hold this action (and the queue behind it) open.
+    setsid -f xdg-open -- "$FILE" >/dev/null 2>&1 || fail "xdg-open failed"
+    ok "" "opened"
+    ;;
+
   run)
     CMD="${3:-}"
     [[ -n $CMD ]] || fail "missing command"
@@ -302,9 +311,10 @@ case "$VERB" in
           fail "taildrop failed: $(printf '%s' "$OUTPUT" | tail -n 1 | cut -c1-160)"
         fi
         ;;
-      dropbox | protondrive)
+      dropbox | protondrive | rclone)
         need rclone
         [[ -n $TARGET ]] || TARGET="$VIA"
+        [[ $VIA == rclone && $TARGET == rclone ]] && fail "upload via rclone needs a remote name"
         rclone listremotes 2>/dev/null | grep -qx "$TARGET:" \
           || fail "rclone remote '$TARGET:' is not configured (rclone config)"
         DEST="$TARGET:$RPATH"

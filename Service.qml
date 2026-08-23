@@ -57,6 +57,7 @@ Item {
   // checked out, including a symlinked development tree.
   readonly property string watchScript: scriptPath("scripts/omazel-watch.sh")
   readonly property string sweepScript: scriptPath("scripts/omazel-sweep.sh")
+  readonly property string probeScript: scriptPath("scripts/omazel-probe.sh")
   readonly property string actScript: scriptPath("scripts/omazel-act.sh")
   readonly property string capsScript: scriptPath("scripts/omazel-caps.sh")
   readonly property string updateCheckScript: scriptPath("scripts/plugin-update-check.sh")
@@ -157,6 +158,10 @@ Item {
   property var _pendingEvents: ({})   // path -> { due, folderIndex }
   property int _pendingCount: 0
   property var _statQueue: []
+  // Probe results keyed by path|mtime|size, so a sweep over a folder with
+  // mime/contents/script rules re-probes only files that actually changed.
+  property var _probeCache: ({})
+  property int _probeCacheCount: 0
   property var _actQueue: []
   property var _currentPlan: null
   property var _cooldown: ({})        // path \0 rule -> epoch
@@ -314,19 +319,49 @@ Item {
     var now = Math.floor(Date.now() / 1000)
     for (var path in _pendingEvents) {
       if (_pendingEvents[path].due > now) continue
-      _statQueue.push({ path: path, folderIndex: _pendingEvents[path].folderIndex })
+      enqueueStat(path, _pendingEvents[path].folderIndex)
       delete _pendingEvents[path]
     }
     recountPending()
     kickStat()
   }
 
+  function enqueueStat(path, folderIndex) {
+    for (var i = 0; i < _statQueue.length; i++) {
+      if (_statQueue[i].path === path) return
+    }
+    _statQueue.push({ path: path, folderIndex: folderIndex })
+  }
+
   function kickStat() {
     if (statProcess.running || _statQueue.length === 0) return
     var job = _statQueue.shift()
+    var folder = folders[job.folderIndex]
+    if (!folder) { kickStat(); return }
     statProcess.job = job
-    statProcess.command = ["stat", "-c", "%F\t%s\t%Y", "--", job.path]
+    statProcess.command = ["bash", probeScript, job.path].concat(Model.probeArgs(folder))
     statProcess.running = true
+  }
+
+  // Builds the enriched file record rule matching sees, from a probe result.
+  function recordFromProbe(path, fields) {
+    var rec = Model.fileRecord(path, parseInt(fields.size, 10) || 0,
+      parseInt(fields.mtime, 10) || 0)
+    rec.btimeSec = parseInt(fields.btime, 10) || 0
+    rec.mime = String(fields.mime || "")
+    rec.source = String(fields.source || "")
+    rec.probes = {}
+    for (var key in fields) {
+      if (key.indexOf("probe:") === 0) rec.probes[key.substring(6)] = fields[key] === "1"
+    }
+    return rec
+  }
+
+  function cacheProbe(path, fields) {
+    if (_probeCacheCount > 4000) { _probeCache = {}; _probeCacheCount = 0 }
+    var key = path + "|" + fields.mtime + "|" + fields.size
+    if (_probeCache[key] === undefined) _probeCacheCount += 1
+    _probeCache[key] = fields
   }
 
   // ------------------------------------------------------------------ sweeping
@@ -361,14 +396,29 @@ Item {
       var parts = lines[i].split("\t")
       if (parts.length < 3) continue
       var path = parts.slice(2).join("\t")
+      var size = parseInt(parts[0], 10) || 0
       var mtime = parseInt(parts[1], 10) || 0
       // Fresh files are the watcher's job; the sweep holding back for the
       // settle window means a file being written right now is not judged from
       // a half-complete state.
       if (now - mtime < settleSec) continue
       if (isRecentOutput(path)) continue
-      evaluate(Model.fileRecord(path, parseInt(parts[0], 10) || 0, mtime), folderIndex)
+      if (!folder.needsProbe) {
+        evaluate(Model.fileRecord(path, size, mtime), folderIndex)
+        continue
+      }
+      // This folder's rules need probe data (mime, contents, script, birth
+      // time, source). Cached results cover files the sweep saw before at
+      // this size and mtime; anything new or changed goes through the probe
+      // queue like a watcher event would.
+      var cached = _probeCache[path + "|" + mtime + "|" + size]
+      if (cached !== undefined) {
+        evaluate(recordFromProbe(path, cached), folderIndex)
+      } else {
+        enqueueStat(path, folderIndex)
+      }
     }
+    kickStat()
   }
 
   // ---------------------------------------------------------------- evaluation
@@ -593,12 +643,12 @@ Item {
       var job = statProcess.job
       statProcess.job = null
       if (exitCode === 0 && job) {
-        var parts = String(statStdout.text || "").trim().split("\t")
+        var fields = Model.parseFields(String(statStdout.text || ""))
         // Only regular files are ruled on: directories moving into a watched
         // folder are left alone, matching what people expect from Hazel.
-        if (parts.length >= 3 && parts[0] === "regular file") {
-          root.evaluate(Model.fileRecord(job.path,
-            parseInt(parts[1], 10) || 0, parseInt(parts[2], 10) || 0), job.folderIndex)
+        if (fields.type === "regular file") {
+          root.cacheProbe(job.path, fields)
+          root.evaluate(root.recordFromProbe(job.path, fields), job.folderIndex)
         }
       }
       root.kickStat()

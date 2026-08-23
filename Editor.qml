@@ -576,6 +576,30 @@ Item {
                       root.commit()
                     }
                   }
+
+                  Row {
+                    width: parent.width
+                    spacing: Style.space(6)
+
+                    Text {
+                      text: "After match"
+                      color: Qt.darker(root.fg, 1.4)
+                      font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                      font.pixelSize: Style.font.caption
+                      width: Style.space(70)
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Dropdown {
+                      width: parent.width - Style.space(82)
+                      showLabel: false
+                      foreground: root.fg
+                      value: ruleCard.rule.cont !== undefined ? ruleCard.rule.cont : "auto"
+                      options: Model.CONTINUE_OPTIONS
+                      onChanged: function (v) { ruleCard.rule.cont = v }
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
+                  }
                 }
               }
             }

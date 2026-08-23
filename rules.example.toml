@@ -11,17 +11,28 @@
 #   none = [...]   none may hold
 #
 # Each condition names a field and an operator:
-#   fields:    name, fullname, extension, path, kind, size, age
+#   fields:    name, fullname, extension, path, kind, mime, source,
+#              size, age, created, contents, script
 #   operators: is, is_not, contains, not_contains, starts_with, ends_with,
-#              matches (regex), in, not_in     — for text fields
-#              is, is_not, gt, lt, gte, lte    — for size and age
+#              matches (regex), in, not_in       — for text fields
+#              is, is_not, gt, lt, gte, lte      — for size, age, created
+#              contains, not_contains, matches   — for contents (grep)
+#              passes, fails                     — for script (exit code)
 #
 # kind is one of: image, video, audio, document, archive, code, other.
-# size accepts "500 KB", "10 MB", "1.5gb". age accepts "45s", "90m", "12h",
-# "14d", "2w" (a bare number means days). String matching ignores case.
+# mime is the real content type (`file --mime-type`). source is the URL the
+# file was downloaded from (browsers/wget record it as an xattr).
+# size accepts "500 KB", "10 MB", "1.5gb". age and created accept "45s",
+# "90m", "12h", "14d", "2w" (a bare number means days). String matching
+# ignores case.
+#
+# A rule may set continue = true (keep matching later rules even after this
+# one relocates the file) or continue = false (stop after this rule always).
 #
 # Patterns in actions may use {name} {ext} {fullname} {date} {year} {month}
 # {day} {time} {folder} — dates come from the file's own modification time.
+# If the rule has a `matches` condition, its capture groups are available as
+# {1}..{9} (and {0} for the whole match), original casing preserved.
 #
 # Edit this file and save: Omazel reloads it automatically.
 
@@ -81,11 +92,28 @@ path = "~/Downloads"
 #     { do = "encrypt", recipient = "age1yourrecipientkey...", identity = "~/.config/age/key.txt", delete_original = true },
 #   ]
 #
+# The classic Hazel showcase — match a bank statement by where it came from
+# and what is inside it, then file it by the year captured from its name:
+#
+# [[folder]]
+# path = "~/Downloads"
+#
+#   [[folder.rule]]
+#   name = "File bank statements"
+#   all = [
+#     { field = "mime", is = "application/pdf" },
+#     { field = "source", contains = "mybank.com" },
+#     { field = "contents", contains = "Account Statement" },
+#     { field = "name", matches = "statement-(\\d{4})" },
+#   ]
+#   actions = [{ do = "move", to = "~/Documents/Bank/{1}" }]
+#
 # Ship files to other machines or clouds:
 #
 #   { do = "upload", via = "taildrop", device = "phone" }          # tailscale file cp
 #   { do = "upload", via = "dropbox", path = "Inbox" }             # rclone remote "dropbox:"
 #   { do = "upload", via = "protondrive", remote = "proton", path = "Backups" }
+#   { do = "upload", via = "rclone", remote = "s3-backup", path = "drop" }   # any remote
 #
 # Other actions:
 #
@@ -93,8 +121,13 @@ path = "~/Downloads"
 #   { do = "rename", pattern = "{date} {name}" }
 #   { do = "sort", into = "{ext}" }              # subfolder of the watched dir
 #   { do = "compress", name = "{name}.zip" }
+#   { do = "open" }                              # open with the default app
 #   { do = "run", command = "~/bin/process-file" }   # file passed as $1 and $OMAZEL_FILE
 #   { do = "delete" }                            # permanent; prefer trash
+#
+# Script conditions gate a rule on anything a command can check:
+#
+#   all = [{ field = "script", passes = "pdfinfo \"$1\" | grep -q Encrypted" }]
 #
 # Per-folder options:
 #
