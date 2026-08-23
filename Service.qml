@@ -258,6 +258,10 @@ Item {
     reloadSoon.restart()
   }
 
+  function openDocs() {
+    Quickshell.execDetached(["xdg-open", Model.DOCS_URL])
+  }
+
   function editRules() {
     Quickshell.execDetached(["omarchy-launch-floating-terminal-with-presentation",
       '${EDITOR:-nvim} "' + rulesPath + '"'])

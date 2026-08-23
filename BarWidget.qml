@@ -230,6 +230,15 @@ BarWidget {
           opacity: enabled ? 1.0 : 0.4
           onClicked: if (root.engine) root.engine.editRules()
         }
+
+        Button {
+          iconText: "󰋽"
+          tooltipText: "Open documentation — rule reference and examples"
+          foreground: root.bar.foreground
+          horizontalPadding: Style.spacing.controlPaddingX
+          verticalPadding: Style.spacing.controlPaddingY
+          onClicked: if (root.engine) root.engine.openDocs()
+        }
       }
 
       // Dry-run switch, styled like a toggle row so its state is obvious.

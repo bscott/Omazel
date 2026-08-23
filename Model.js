@@ -1125,6 +1125,20 @@ var ACTION_OPTIONS = [
   { value: "upload", label: "Upload / send" }
 ]
 
+// Shown by the editor's ⓘ hints panel; one row per pattern token.
+var PATTERN_HINTS = [
+  { token: "{name}", hint: "file name without extension" },
+  { token: "{fullname}", hint: "file name with extension" },
+  { token: "{ext}", hint: "extension, lowercase, no dot" },
+  { token: "{folder}", hint: "name of the file's folder" },
+  { token: "{date}", hint: "file's date as 2026-08-22" },
+  { token: "{year} {month} {day}", hint: "file's date, piecewise" },
+  { token: "{time}", hint: "file's time as 16-45" },
+  { token: "{1}…{9}, {0}", hint: "capture groups from a 'matches regex' condition" }
+]
+
+var DOCS_URL = "https://github.com/bscott/Omazel/blob/main/docs/HOWTO.md"
+
 var CONTINUE_OPTIONS = [
   { value: "auto", label: "Stop if file was relocated (default)" },
   { value: "always", label: "Always keep matching later rules" },

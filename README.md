@@ -1,47 +1,47 @@
 # Omazel
 
-Hazel for [Omarchy](https://omarchy.org). Omazel watches folders and acts on
-the files that land in them — sorting downloads, filing documents, expiring
-old clutter, unpacking archives, encrypting drop folders, and shipping files
-to your phone or cloud — driven by rules you write once in a small TOML file.
+**Hazel for [Omarchy](https://omarchy.org).** Omazel watches folders and acts
+on the files that land in them — sorting downloads, filing documents,
+expiring old clutter, unpacking archives, encrypting drop folders, and
+shipping files to your phone or cloud — driven by rules that run quietly in
+the background while a bar widget shows what happened.
 
 If you have used [Hazel](https://www.noodlesoft.com/) on macOS, this is that
-workflow for your Omarchy desktop: rules run in the background, and a bar
-widget shows what happened, lets you pause everything, and offers a dry-run
-mode that logs what rules *would* do without touching anything.
+workflow for your Omarchy desktop.
 
 ## Features
 
 - **Watch any folders** — instant reaction to new files via inotify, plus a
   periodic sweep that fires age-based rules and catches files that arrived
   while the shell was off.
-- **Hazel-style rules** — ordered rules per folder with `all` / `any` / `none`
-  condition groups over name, extension, kind, size, age, created date, path,
-  real MIME type, download source URL, file contents, and arbitrary script
-  checks; first rule that relocates a file wins (overridable per rule with
-  `continue`).
-- **Regex capture tokens** — a `matches` condition exposes its capture groups
-  to every pattern in the rule as `{1}`, `{2}`, … so
+- **Two ways to write rules** — a built-in **visual editor** in the widget
+  popup (folders, conditions, and actions from dropdowns, validated before
+  saving), or plain TOML in `~/.config/omazel/rules.toml` with your own
+  editor. Both round-trip; either way, edits apply on save.
+- **Hazel-grade conditions** — name, extension, kind, size, age, created
+  date, path, real **MIME type**, the **URL a file was downloaded from**,
+  **file contents** (grep), and arbitrary **script checks** (exit 0 =
+  match), combined with `all` / `any` / `none` groups.
+- **Regex capture tokens** — a `matches` condition exposes its capture
+  groups to every pattern in the rule as `{1}`, `{2}`, … so
   `^Invoice-(\d{4})` can file into `~/Documents/Invoices/{1}`.
-- **Actions** — move, copy, rename, sort into subfolders, trash, delete,
-  extract archives, compress, desktop notifications, and run arbitrary
-  commands.
+- **Rich actions** — move, copy, rename, sort into subfolders, trash,
+  delete, open, extract archives, compress, desktop notifications, and run
+  arbitrary commands.
 - **age encryption** — encrypt files on arrival with
   [age](https://age-encryption.org), with a checksum-verified round trip
   before the plaintext original may be removed (removal is opt-in and
-  refuses to run unverified unless you explicitly say so).
-- **Cloud handoff** — send files via Taildrop (`tailscale file cp`), or to
-  Dropbox / Proton Drive through configured `rclone` remotes.
-- **Safe by default** — collision-safe naming (`report (2).pdf`), partial
-  downloads ignored, settle delay before judging fresh files, loop protection
-  so rules do not chew on their own output, and a global dry-run switch.
-- **Visual rule editor** — build and edit folders, rules, conditions, and
-  actions entirely from the widget popup, no TOML required. It validates
-  through the same compiler the engine uses before writing, keeps a `.bak` of
-  the previous version, and hand-written files survive the round trip.
+  refuses to run unverified unless you say so explicitly).
+- **Cloud handoff** — Taildrop to any tailnet device, Dropbox and Proton
+  Drive presets, or any configured rclone remote (S3, Drive, B2, SFTP, …).
+- **Safe by default** — collision-safe naming (`report (2).pdf`), hidden
+  files and partial downloads never touched, settle delay before judging
+  fresh files, per-rule cooldowns, loop protection so rules cannot chew on
+  their own output, and a global **dry-run** switch that logs what rules
+  *would* do without touching anything.
 - **Bar widget** — engine status at a glance, per-folder pause toggles, a
-  recent-activity feed, rule-file error reporting, missing-tool warnings, and
-  one-click plugin updates.
+  recent-activity feed, rule-problem and missing-tool warnings, pattern-
+  variable hints (ⓘ), a docs shortcut, and one-click plugin updates.
 - **Scriptable** — pause, resume, dry-run, reload, and sweep over
   `omarchy-shell` IPC for keybindings.
 
@@ -51,35 +51,31 @@ mode that logs what rules *would* do without touching anything.
 omarchy plugin add https://github.com/bscott/Omazel.git --enable
 ```
 
-Then place the **Omazel** widget in your bar from the Omarchy bar settings
-(category *System*). Open the popup and either **Build rules visually** in
-the built-in editor, hit **Create starter rules** to start from the commented
-example, or copy [`rules.example.toml`](rules.example.toml) to
-`~/.config/omazel/rules.toml` yourself. Edits to the rules file apply
-automatically on save, whichever way they were made.
+Add the **Omazel** widget to your bar (Omarchy bar settings, category
+*System*), click the broom, and either **Build rules visually** or
+**Create starter rules** to begin from a commented example file.
 
-`inotify-tools` is the one hard dependency for live watching (the sweep works
-without it): `sudo pacman -S inotify-tools`. Everything else is only needed by
-the rules you actually write — `age`, `tailscale`, `rclone`, `zip`/`unzip`,
-`7zip`, `unrar` for actions; `file` for `mime` conditions and `getfattr`
-(package `attr`) for `source` conditions — and the popup tells you if a rule
-needs a tool that is missing.
+`inotify-tools` is the one hard dependency for live watching
+(`sudo pacman -S inotify-tools`); everything else is only needed by the
+rules you actually write, and the popup warns when something is missing.
 
-## Rules
+## A taste
 
 ```toml
 [[folder]]
 path = "~/Downloads"
 
+  # The classic Hazel showcase: match by real content type, download origin,
+  # and text inside the file — file it by the year captured from its name.
   [[folder.rule]]
-  name = "Sort screenshots"
+  name = "File bank statements"
   all = [
-    { field = "name", contains = "screenshot" },
-    { field = "kind", is = "image" },
+    { field = "mime", is = "application/pdf" },
+    { field = "source", contains = "mybank.com" },
+    { field = "contents", contains = "Account Statement" },
+    { field = "name", matches = "statement-(\\d{4})" },
   ]
-  actions = [
-    { do = "move", to = "~/Pictures/Screenshots" },
-  ]
+  actions = [{ do = "move", to = "~/Documents/Bank/{1}" }]
 
   [[folder.rule]]
   name = "Expire old downloads"
@@ -87,95 +83,21 @@ path = "~/Downloads"
   actions = [{ do = "trash" }]
 ```
 
-Rules are checked top-down for every file. When a rule matches, its actions
-run in order; once a rule moves, renames, trashes, or deletes the file, later
-rules are skipped for it.
+Prefer clicking to typing? The same rules can be built entirely in the
+visual editor — open the widget popup and hit **Edit rules**.
 
-### Conditions
+## Documentation
 
-| Field | What it sees | Operators |
-|-------|--------------|-----------|
-| `name` | basename without extension | `is`, `is_not`, `contains`, `not_contains`, `starts_with`, `ends_with`, `matches` (regex), `in`, `not_in` |
-| `fullname` | basename with extension | same as `name` |
-| `extension` | lowercase, no dot | same as `name` |
-| `path` | absolute path | same as `name` |
-| `kind` | `image`, `video`, `audio`, `document`, `archive`, `code`, `other` | same as `name` |
-| `mime` | real content type via `file --mime-type`, e.g. `application/pdf` | same as `name` |
-| `source` | URL the file was downloaded from (browsers and wget record it in the `user.xdg.origin.url` xattr) | same as `name` |
-| `size` | file size — values like `"500 KB"`, `"10 MB"`, `"1.5gb"` | `is`, `is_not`, `gt`, `lt`, `gte`, `lte` |
-| `age` | time since last modification — `"45s"`, `"90m"`, `"12h"`, `"14d"`, `"2w"`, bare number = days | same as `size` |
-| `created` | time since the file was created (birth time; falls back to mtime where the filesystem has none) | same as `size` |
-| `contents` | text inside the file, via grep | `contains`, `not_contains`, `matches` |
-| `script` | any command — the file is passed as `$1` and `$OMAZEL_FILE` | `passes` (exit 0), `fails` |
+- **[How-to guide](docs/HOWTO.md)** — every condition, action, and pattern
+  token; the visual editor; encryption safety; how the engine works;
+  settings; troubleshooting.
+- **[Rule cookbook](docs/EXAMPLES.md)** — ready-to-paste recipes: downloads
+  triage, invoice filing with captures, encrypt-and-ship drop folders,
+  Taildrop, script-gated rules, catch-alls, and more.
 
-String matching ignores case. Group conditions with `all` (every), `any` (at
-least one), and `none` (none); a rule with no conditions matches every file,
-which makes a deliberate catch-all possible at the bottom of a folder.
+The ⓘ button in the widget and editor links here too.
 
-`mime`, `source`, `contents`, `created`, and `script` conditions run a small
-per-file probe; results are cached by path, size, and mtime so periodic sweeps
-only re-probe files that changed.
-
-A rule may also set `continue`: `true` keeps evaluating later rules even after
-this one relocates the file, `false` stops after this rule matches no matter
-what, and leaving it unset keeps the default — stop only once a rule has
-moved, renamed, trashed, or deleted the file.
-
-Example — the classic Hazel showcase, all in one rule:
-
-```toml
-  [[folder.rule]]
-  name = "File bank statements"
-  all = [
-    { field = "mime", is = "application/pdf" },
-    { field = "source", contains = "mybank.com" },
-    { field = "contents", contains = "Account Statement" },
-    { field = "name", matches = "statement-(\\d{4})-(\\d{2})" },
-  ]
-  actions = [
-    { do = "move", to = "~/Documents/Bank/{1}", as = "{1}-{2} statement.pdf" },
-  ]
-```
-
-### Actions
-
-```toml
-{ do = "move", to = "~/Documents/{year}" }         # collision-safe
-{ do = "copy", to = "~/Backups", as = "{date} {name}.{ext}" }
-{ do = "rename", pattern = "{date} {name}" }        # keeps the extension if omitted
-{ do = "sort", into = "{ext}" }                     # subfolder of the watched dir
-{ do = "trash" }                                    # gio trash — recoverable
-{ do = "delete" }                                   # permanent; prefer trash
-{ do = "open" }                                     # xdg-open with the default app
-{ do = "extract", delete_archive = true }           # zip/tar/7z/rar, tarbomb-safe
-{ do = "compress", name = "{name}.zip" }
-{ do = "notify", message = "Filed {fullname}" }
-{ do = "run", command = "~/bin/process-file" }      # file passed as $1 and $OMAZEL_FILE
-{ do = "encrypt", recipient = "age1...", identity = "~/.config/age/key.txt", delete_original = true }
-{ do = "upload", via = "taildrop", device = "phone" }
-{ do = "upload", via = "dropbox", path = "Inbox" }              # rclone remote "dropbox:"
-{ do = "upload", via = "protondrive", remote = "proton", path = "Backups" }
-{ do = "upload", via = "rclone", remote = "s3-backup", path = "drop" }   # any rclone remote
-```
-
-Patterns expand `{name}` `{ext}` `{fullname}` `{date}` `{year}` `{month}`
-`{day}` `{time}` `{folder}`, with dates taken from the file's own modification
-time — so `to = "~/Documents/{year}"` files things by when they arrived. When
-the rule has a `matches` condition, its capture groups are available too:
-`{1}` through `{9}`, and `{0}` for the whole match, with the original casing
-of the filename preserved.
-
-### Encryption safety
-
-`encrypt` runs `age` against the recipient (or an `-R` recipients file) and
-never removes the plaintext lightly. With `delete_original = true`, Omazel
-decrypts the fresh ciphertext with your `identity` file and compares SHA-256
-checksums; only a byte-identical round trip authorizes removal (to the trash,
-so even that is recoverable). Asking for deletion without an identity to
-verify against is a config error unless you opt out explicitly with
-`verify = false`.
-
-## Bar widget
+## Widget
 
 | Input | Action |
 |-------|--------|
@@ -183,20 +105,9 @@ verify against is a config error unless you opt out explicitly with
 | Middle click | Pause / resume the whole engine |
 
 The popup shows engine status, pause and dry-run toggles, a manual sweep
-button, the visual rule editor, a shortcut to open the rules file in your
-text editor, every watched folder with its own pause toggle, the recent
-activity feed (including what dry-run would have done), rule problems, and
-missing-tool warnings.
-
-**Edit rules** opens the visual editor: add watched folders, stack
-conditions (All / Any / None per row), pick actions from a dropdown with the
-right inputs for each one, and reorder rules and actions with the arrows —
-order matters, since the first rule that relocates a file wins. Save
-validates everything through the engine's own rule compiler first, so a
-mistake shows up as a message in the editor instead of a broken rules file;
-the previous version is kept alongside as `rules.toml.bak`. A hand-written
-file opened in the editor keeps its structure, but comments are dropped on
-save (the editor warns before that happens).
+button, the visual rule editor, a text-editor shortcut, every watched folder
+with its own pause toggle, the recent activity feed (including what dry-run
+would have done), rule problems, and missing-tool warnings.
 
 ## Scripting
 
@@ -214,16 +125,6 @@ Example Hyprland binding (`~/.config/hypr/bindings.conf`):
 bindd = SUPER SHIFT, O, Toggle Omazel, exec, omarchy-shell omazel toggle
 ```
 
-## How it works
-
-A headless service owns one `inotifywait` per watched folder and a slow sweep
-timer. New files settle for a few seconds, get stat-ed, and run through the
-rule engine (`Model.js` — pure JS, unit-tested); each resulting action is one
-invocation of `scripts/omazel-act.sh`, which does the file work and appends a
-TSV line to `~/.local/state/omazel/activity.log`. A per-file-per-rule cooldown
-keeps the watcher and the sweep from double-firing, and freshly produced
-outputs are ignored briefly so rules cannot loop on their own results.
-
 ## Development
 
 Install the plugin with `omarchy plugin add` (above), then edit it in place
@@ -234,6 +135,10 @@ node tests/model.test.js   # rule engine unit tests
 omarchy plugin validate ~/.config/omarchy/plugins/io.github.bscott.omazel
 omarchy-restart-shell      # reload the shell so the service picks up edits
 ```
+
+The rule engine (`Model.js`) is pure JS and fully unit-tested; actions are
+one shell script invocation each (`scripts/omazel-act.sh`), and everything
+Omazel does is appended to `~/.local/state/omazel/activity.log`.
 
 ## License
 

@@ -25,6 +25,7 @@ Item {
   property var draft: []
   property var errors: []
   property bool parseFailed: false
+  property bool showHints: false
 
   // What the popup should size the card to; the Flickable scrolls once the
   // screen caps it.
@@ -152,8 +153,17 @@ Item {
       font.pixelSize: Style.font.subtitle
       font.bold: true
       anchors.verticalCenter: parent.verticalCenter
-      width: parent.width - saveButton.width - cancelButton.width - Style.space(16)
+      width: parent.width - hintsButton.width - saveButton.width - cancelButton.width
+        - Style.space(24)
       elide: Text.ElideRight
+    }
+
+    Button {
+      id: hintsButton
+      iconText: "󰋽"
+      tooltipText: "Pattern variables and docs"
+      foreground: root.showHints ? Color.accent : root.fg
+      onClicked: root.showHints = !root.showHints
     }
 
     Button {
@@ -193,6 +203,71 @@ Item {
       id: body
       width: flick.width
       spacing: Style.space(10)
+
+      // ⓘ hints: what the {tokens} in patterns expand to, and the way to the
+      // full documentation.
+      BorderSurface {
+        visible: root.showHints
+        width: body.width
+        height: hintsColumn.implicitHeight + Style.space(16)
+        radius: Style.spacing.labelGap
+        color: Style.normalFillFor(root.fg, Color.accent)
+        borderSpec: Border.none()
+
+        Column {
+          id: hintsColumn
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          anchors.leftMargin: Style.space(10)
+          anchors.rightMargin: Style.space(10)
+          spacing: Style.space(3)
+
+          Text {
+            text: "Pattern variables — usable in destinations, names, and messages"
+            color: root.fg
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.caption
+            font.bold: true
+          }
+
+          Repeater {
+            model: Model.PATTERN_HINTS
+
+            Row {
+              required property var modelData
+              width: hintsColumn.width
+              spacing: Style.space(8)
+
+              Text {
+                text: modelData.token
+                color: Color.accent
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.caption
+                width: Style.space(120)
+              }
+
+              Text {
+                text: modelData.hint
+                color: Qt.darker(root.fg, 1.3)
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideRight
+                width: parent.width - Style.space(132)
+              }
+            }
+          }
+
+          Item { width: 1; height: Style.space(4) }
+
+          Button {
+            text: "Open full docs"
+            iconText: "󰈙"
+            foreground: root.fg
+            onClicked: if (root.engine) root.engine.openDocs()
+          }
+        }
+      }
 
       Text {
         visible: root.parseFailed
