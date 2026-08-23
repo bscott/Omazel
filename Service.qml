@@ -111,6 +111,10 @@ Item {
 
   property int nowSec: Math.floor(Date.now() / 1000)
 
+  // Asks the bar widget to open its popup ("popup") or the visual editor
+  // ("editor") — the scriptable route to the UI, e.g. from a keybinding.
+  signal popupRequest(string mode)
+
   readonly property bool watchable: caps["inotifywait"] === true
   readonly property int activeFolderCount: {
     var n = 0
@@ -833,6 +837,8 @@ Item {
       })
     }
 
+    function show(): string { root.popupRequest("popup"); return "ok" }
+    function editor(): string { root.popupRequest("editor"); return "ok" }
     function pause(): string { root.setPaused(true); return "paused" }
     function resume(): string { root.setPaused(false); return "running" }
     function toggle(): string { return root.setPaused(!root.paused) ? "paused" : "running" }

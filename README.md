@@ -9,6 +9,8 @@ the background while a bar widget shows what happened.
 If you have used [Hazel](https://www.noodlesoft.com/) on macOS, this is that
 workflow for your Omarchy desktop.
 
+![The Omazel popup: engine status, dry-run toggle, watched folders, and the recent-activity feed](preview.png)
+
 ## Features
 
 - **Watch any folders** — instant reaction to new files via inotify, plus a
@@ -86,6 +88,9 @@ path = "~/Downloads"
 Prefer clicking to typing? The same rules can be built entirely in the
 visual editor — open the widget popup and hit **Edit rules**.
 
+<img src="docs/editor.png" width="400" alt="The visual rule editor: folders, condition rows with field/operator dropdowns, actions with per-action inputs, and reordering">
+
+
 ## Documentation
 
 - **[How-to guide](docs/HOWTO.md)** — every condition, action, and pattern
@@ -117,6 +122,8 @@ omarchy-shell omazel toggle     # pause / resume (also pause, resume)
 omarchy-shell omazel dryRunToggle
 omarchy-shell omazel sweep      # evaluate everything now
 omarchy-shell omazel reload     # re-read the rules file
+omarchy-shell omazel show       # open the widget popup
+omarchy-shell omazel editor     # open the visual rule editor
 ```
 
 Example Hyprland binding (`~/.config/hypr/bindings.conf`):

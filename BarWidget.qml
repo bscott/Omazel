@@ -51,6 +51,17 @@ BarWidget {
     when: root.engine !== null
   }
 
+  // `omarchy-shell omazel show` / `omazel editor` open the UI from a script
+  // or keybinding.
+  Connections {
+    target: root.engine
+    function onPopupRequest(mode) {
+      root.popupOpen = true
+      if (mode === "editor") root.openEditor()
+      else root.editing = false
+    }
+  }
+
   function shortPath(path) {
     if (!root.engine) return path
     var home = root.engine.home

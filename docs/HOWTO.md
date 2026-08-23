@@ -47,6 +47,8 @@ a rule wants a tool that is missing:
 
 ## Two ways to edit rules
 
+<img src="editor.png" width="400" alt="The visual rule editor">
+
 **Visual editor** — click the broom, then **Edit rules**. Add watched
 folders, stack conditions, pick actions from dropdowns that show exactly the
 inputs each action takes, and reorder rules with the arrows. Save validates
@@ -252,6 +254,8 @@ omarchy-shell omazel pause         # also: resume, toggle
 omarchy-shell omazel dryRunToggle  # also: dryRunOn, dryRunOff
 omarchy-shell omazel sweep         # evaluate everything now
 omarchy-shell omazel reload        # re-read the rules file
+omarchy-shell omazel show          # open the widget popup
+omarchy-shell omazel editor        # open the visual rule editor
 ```
 
 Hyprland binding example:
