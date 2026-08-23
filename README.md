@@ -9,6 +9,8 @@ the background while a bar widget shows what happened.
 If you have used [Hazel](https://www.noodlesoft.com/) on macOS, this is that
 workflow for your Omarchy desktop.
 
+**Listed on the [Omarchy Plugin Marketplace](https://omarchyplugins.com/plugin.html?id=io.github.bscott.omazel)** (approved and verified).
+
 ![The Omazel popup: engine status, dry-run toggle, watched folders, and the recent-activity feed](preview.png)
 
 ## Features
