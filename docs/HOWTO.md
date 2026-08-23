@@ -30,13 +30,17 @@ Place the **Omazel** widget in your bar (Omarchy bar settings, category
 - **Create starter rules** — copies a commented example file to
   `~/.config/omazel/rules.toml` and you take it from there in your `$EDITOR`.
 
-The only hard dependency is `inotify-tools` for live watching (`sudo pacman
--S inotify-tools`); without it the periodic sweep still works. Everything
-else is needed only by the rules you write, and the widget popup warns when
-a rule wants a tool that is missing:
+Nothing is required out of the box: flat folders are live-watched by a
+built-in Qt directory watcher, and the rules file hot-reloads natively.
+Installing `inotify-tools` (`sudo pacman -S inotify-tools`) upgrades
+watching to inotify — sharper file events, and the only way to live-watch
+`recursive = true` folders (without it, recursive folders are covered by
+the periodic sweep alone). Everything else is needed only by the rules you
+write, and the widget popup warns when a rule wants a tool that is missing:
 
 | Tool | Needed for |
 |------|-----------|
+| `inotifywait` | preferred watcher; required for recursive folders |
 | `age` | `encrypt` action |
 | `tailscale` | `upload via = "taildrop"` |
 | `rclone` | `upload` to Dropbox, Proton Drive, or any rclone remote |
@@ -232,9 +236,11 @@ see rules fire.
 ## How the engine works
 
 - **Watcher** — one `inotifywait` per folder reacts the moment a file
-  finishes arriving (`close_write` / `moved_to`). New files get a settle
-  delay (default 3s) before being judged, so nothing is evaluated
-  half-written.
+  finishes arriving (`close_write` / `moved_to`). Without inotify-tools, a
+  built-in Qt directory watcher covers flat folders instead — it reacts to
+  files appearing, disappearing, or changing size, leaving quiet in-place
+  rewrites to the sweep. Either way, new files get a settle delay (default
+  3s) before being judged, so nothing is evaluated half-written.
 - **Sweep** — a periodic re-scan (default 5 minutes) fires age-based rules
   (files don't emit events by getting older) and catches anything that
   arrived while the shell was off.

@@ -9,15 +9,16 @@ the background while a bar widget shows what happened.
 If you have used [Hazel](https://www.noodlesoft.com/) on macOS, this is that
 workflow for your Omarchy desktop.
 
-**Listed on the [Omarchy Plugin Marketplace](https://omarchyplugins.com/plugin.html?id=io.github.bscott.omazel)** (approved and verified).
+**Listed on the [Omarchy Plugin Marketplace](https://omarchyplugins.com/plugin.html?id=io.github.bscott.omazel)** (approved and verified) · [Releases](https://github.com/bscott/Omazel/releases)
 
 ![The Omazel popup: engine status, dry-run toggle, watched folders, and the recent-activity feed](preview.png)
 
 ## Features
 
-- **Watch any folders** — instant reaction to new files via inotify, plus a
-  periodic sweep that fires age-based rules and catches files that arrived
-  while the shell was off.
+- **Watch any folders** — instant reaction to new files via inotify (with a
+  built-in Qt directory watcher as a zero-dependency fallback for flat
+  folders), plus a periodic sweep that fires age-based rules and catches
+  files that arrived while the shell was off.
 - **Two ways to write rules** — a built-in **visual editor** in the widget
   popup (folders, conditions, and actions from dropdowns, validated before
   saving), or plain TOML in `~/.config/omazel/rules.toml` with your own
@@ -59,9 +60,12 @@ Add the **Omazel** widget to your bar (Omarchy bar settings, category
 *System*), click the broom, and either **Build rules visually** or
 **Create starter rules** to begin from a commented example file.
 
-`inotify-tools` is the one hard dependency for live watching
-(`sudo pacman -S inotify-tools`); everything else is only needed by the
-rules you actually write, and the popup warns when something is missing.
+Everything works out of the box: flat folders are live-watched by a built-in
+Qt watcher, and the rules file hot-reloads natively. Installing
+`inotify-tools` (`sudo pacman -S inotify-tools`) upgrades watching to
+inotify — sharper events, and required for `recursive = true` folders. Other
+tools are only needed by the rules you actually write, and the popup warns
+when something is missing.
 
 ## A taste
 

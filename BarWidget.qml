@@ -425,10 +425,10 @@ BarWidget {
 
                 Text {
                   text: folderRow.modelData.rules.length + " rule"
-            textFormat: Text.PlainText
                     + (folderRow.modelData.rules.length === 1 ? "" : "s")
                     + (folderRow.modelData.recursive ? " · recursive" : "")
                     + (folderRow.folderPaused ? " · paused" : "")
+                  textFormat: Text.PlainText
                   color: Qt.darker(root.bar.foreground, 1.5)
                   font.family: root.bar.fontFamily
                   font.pixelSize: Style.font.caption
@@ -518,9 +518,9 @@ BarWidget {
 
               Text {
                 text: activityRow.modelData.rule
-            textFormat: Text.PlainText
                   + (activityRow.modelData.message !== ""
                     ? " · " + activityRow.modelData.message : "")
+                textFormat: Text.PlainText
                 color: activityRow.isError
                   ? root.bar.urgent : Qt.darker(root.bar.foreground, 1.6)
                 font.family: root.bar.fontFamily

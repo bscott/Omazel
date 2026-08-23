@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.bscott.omazel",
   "name": "Omazel",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Brian Scott",
   "license": "MIT",
   "description": "Hazel-style file automation for Omarchy: watch folders, match rules, and move, rename, trash, extract, encrypt, or upload files automatically.",

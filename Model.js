@@ -963,8 +963,11 @@ function planFile(file, folder, nowSec) {
 // Which external tools the compiled config actually depends on, so the popup
 // warns about the missing ones that matter and stays silent about the rest.
 function requiredTools(folders) {
-  var need = { inotifywait: "watching folders" }
+  var need = {}
   for (var f = 0; f < folders.length; f++) {
+    // Flat folders fall back to the QML directory watcher when inotify-tools
+    // is absent; only recursion genuinely requires inotifywait.
+    if (folders[f].recursive) need["inotifywait"] = "watching recursive folders"
     if (folders[f].probeNeeds && folders[f].probeNeeds.mime) need["file"] = "mime conditions"
     if (folders[f].probeNeeds && folders[f].probeNeeds.source) need["getfattr"] = "source conditions"
     for (var r = 0; r < folders[f].rules.length; r++) {

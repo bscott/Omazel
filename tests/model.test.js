@@ -426,9 +426,9 @@ path = "~/A"
   const required = Model.requiredTools(folders)
   const tools = required.map(t => t.tool).sort()
   check("caps: tools derived from actions", tools,
-    ["age", "gio", "inotifywait", "rclone"])
+    ["age", "gio", "rclone"])
   const missing = Model.missingTools(required,
-    { inotifywait: true, gio: false, age: true, rclone: false })
+    { gio: false, age: true, rclone: false })
   check("caps: only absent tools reported", missing.map(t => t.tool).sort(),
     ["gio", "rclone"])
 }
@@ -698,7 +698,32 @@ path = "/a"
 `).value, HOME)
   const tools = Model.requiredTools(cfg.folders).map(t => t.tool).sort()
   check("tools: probe fields and open covered", tools,
-    ["file", "getfattr", "inotifywait", "xdg-open"])
+    ["file", "getfattr", "xdg-open"])
+}
+
+{
+  // Flat folders can live-watch without inotify (QML fallback); recursion
+  // cannot, so only a recursive folder makes inotifywait a requirement.
+  const flat = Model.compileConfig(Model.parseToml(`
+[[folder]]
+path = "/a"
+  [[folder.rule]]
+  name = "r"
+  actions = [{ do = "notify" }]
+`).value, HOME)
+  check("tools: flat folders do not require inotifywait",
+    Model.requiredTools(flat.folders).map(t => t.tool).indexOf("inotifywait"), -1)
+  const recursive = Model.compileConfig(Model.parseToml(`
+[[folder]]
+path = "/a"
+recursive = true
+  [[folder.rule]]
+  name = "r"
+  actions = [{ do = "notify" }]
+`).value, HOME)
+  check("tools: recursive folders require inotifywait",
+    Model.requiredTools(recursive.folders).map(t => t.tool).sort(),
+    ["inotifywait", "notify-send"])
 }
 
 // ---------------------------------------------------------------- editor

@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import Qt.labs.folderlistmodel
 import "Model.js" as Model
 
 // Headless singleton that owns the Omazel engine: loading the rules file,
@@ -816,20 +817,97 @@ Item {
     }
   }
 
-  // Watches the rules file's own directory so edits apply without anyone
-  // having to find a reload button. The watch script only reports writes and
-  // renames, which is exactly what saving from an editor produces.
-  Process {
-    id: rulesWatchProcess
-    running: root.configLoaded || root.rulesFileExists === false
-    command: ["bash", root.watchScript, root.rulesPath.substring(0, root.rulesPath.lastIndexOf("/")), "0"]
-    stdout: SplitParser {
-      onRead: function (line) {
-        var tab = line.indexOf("\t")
-        if (tab < 0) return
-        if (line.substring(tab + 1) === root.rulesPath) reloadSoon.restart()
+  // Fallback live watching when inotify-tools is not installed: a QML
+  // FolderListModel per flat folder, driven by Qt's own filesystem watcher —
+  // no external process, no extra package. It cannot recurse (recursive
+  // folders stay sweep-only without inotifywait, and the missing-tool
+  // warning says so), and in-place rewrites that change neither name nor
+  // size may wait for the sweep; files appearing, disappearing, or growing
+  // are caught immediately. Events funnel through the same onWatchLine
+  // settle/ignore path as inotify events.
+  Instantiator {
+    model: root.watchable ? [] : root.folders
+    delegate: Item {
+      id: fallbackWatcher
+      required property var modelData
+      required property int index
+
+      readonly property bool active: !root.watchable && modelData.enabled
+        && !modelData.recursive && !root.paused
+        && root.pausedFolders[modelData.path] !== true
+
+      // path -> "mtime|size", so only genuinely new or changed files are
+      // forwarded. The first Ready pass only primes the snapshot: startup
+      // evaluation belongs to the sweep, not to a synthetic burst of events.
+      property var snapshot: ({})
+      property bool primed: false
+
+      onActiveChanged: if (!active) primed = false
+
+      function diff() {
+        if (!fallbackWatcher.active) return
+        var next = {}
+        for (var i = 0; i < folderModel.count; i++) {
+          var path = String(folderModel.get(i, "filePath") || "")
+          if (path === "") continue
+          var stamp = String(folderModel.get(i, "fileModified"))
+            + "|" + String(folderModel.get(i, "fileSize"))
+          next[path] = stamp
+          if (fallbackWatcher.primed && fallbackWatcher.snapshot[path] !== stamp)
+            root.onWatchLine(fallbackWatcher.index, "CHANGED\t" + path)
+        }
+        fallbackWatcher.snapshot = next
+        fallbackWatcher.primed = true
+      }
+
+      // The model can burst several change signals for one filesystem event;
+      // collapse them into a single diff.
+      Timer {
+        id: fallbackDebounce
+        interval: 400
+        repeat: false
+        onTriggered: fallbackWatcher.diff()
+      }
+
+      FolderListModel {
+        id: folderModel
+        folder: fallbackWatcher.active
+          ? "file://" + fallbackWatcher.modelData.path
+          : "file:///nonexistent/omazel-idle"
+        showDirs: false
+        showHidden: false
+        onCountChanged: fallbackDebounce.restart()
+        onStatusChanged: if (status === FolderListModel.Ready) fallbackDebounce.restart()
+      }
+
+      Connections {
+        target: folderModel
+        function onDataChanged() { fallbackDebounce.restart() }
+        function onRowsInserted() { fallbackDebounce.restart() }
+        function onRowsRemoved() { fallbackDebounce.restart() }
       }
     }
+  }
+
+  // Watches the rules file natively so edits apply without anyone having to
+  // find a reload button — no inotify-tools involved. FileView is only the
+  // change signal here; the actual read stays on the bounded, deadline-
+  // guarded shell path in reload().
+  FileView {
+    path: root.rulesPath
+    watchChanges: true
+    preload: false
+    printErrors: false
+    onFileChanged: reloadSoon.restart()
+  }
+
+  Timer {
+    // A watcher cannot attach to a file that does not exist yet, so while
+    // there is no rules file, retry on a slow tick and catch its creation.
+    interval: 10000
+    repeat: true
+    running: !root.rulesFileExists
+    onTriggered: root.reload()
   }
 
   Process {
