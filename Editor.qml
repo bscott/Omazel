@@ -4,12 +4,16 @@ import qs.Commons
 import "Model.js" as Model
 
 // The visual rule editor, shown inside the widget's popup as an alternative
-// to editing rules.toml by hand. It edits a plain-JS "draft" (see Model.js):
-// text fields and toggles mutate the draft in place so typing never rebuilds
-// the view, while structural changes — adding, removing, or reordering
-// folders, rules, conditions, and actions — clone the draft to refresh the
-// Repeaters. Save validates through the engine's own compiler and only
-// writes a file the engine is guaranteed to load.
+// to editing rules.toml by hand. It edits a plain-JS "draft" (see Model.js).
+//
+// Mutation model, and why it is index-based: Repeater converts a JS-array
+// model into variant copies, so a delegate's modelData is a snapshot — good
+// for display, but writing through it mutates a throwaway object. Every
+// change therefore goes through the helpers below, which address the live
+// draft by indices (folder, rule, condition/action). Text edits write in
+// place with no visual side effects; structural changes (add, remove,
+// reorder, or anything that alters which controls are shown) call commit(),
+// which clones the draft so every Repeater re-reads it.
 Item {
   id: root
 
@@ -54,7 +58,69 @@ Item {
     draft = JSON.parse(JSON.stringify(draft))
   }
 
-  function moveItem(list, index, delta) {
+  // ------------------------------------------------------- draft mutations
+
+  function addFolder() { draft.push(Model.newDraftFolder()); commit() }
+  function removeFolder(fi) { draft.splice(fi, 1); commit() }
+  function setFolder(fi, key, value) { draft[fi][key] = value }
+
+  function addRule(fi) { draft[fi].rules.push(Model.newDraftRule()); commit() }
+  function removeRule(fi, ri) { draft[fi].rules.splice(ri, 1); commit() }
+  function setRule(fi, ri, key, value) { draft[fi].rules[ri][key] = value }
+  function moveRule(fi, ri, delta) { moveIn(draft[fi].rules, ri, delta) }
+
+  function addCondition(fi, ri) {
+    draft[fi].rules[ri].conditions.push(Model.newDraftCondition())
+    commit()
+  }
+  function removeCondition(fi, ri, ci) {
+    draft[fi].rules[ri].conditions.splice(ci, 1)
+    commit()
+  }
+  function setCondition(fi, ri, ci, key, value) {
+    draft[fi].rules[ri].conditions[ci][key] = value
+  }
+  // Changing the field can invalidate the operator and always changes the
+  // value placeholder, so the row is rebuilt.
+  function setConditionField(fi, ri, ci, value) {
+    var cond = draft[fi].rules[ri].conditions[ci]
+    cond.field = value
+    var ops = Model.opsForField(value)
+    var valid = false
+    for (var i = 0; i < ops.length; i++) if (ops[i].value === cond.op) valid = true
+    if (!valid) cond.op = ops[0].value
+    commit()
+  }
+  function setConditionOp(fi, ri, ci, value) {
+    draft[fi].rules[ri].conditions[ci].op = value
+    commit()
+  }
+
+  function addAction(fi, ri) {
+    draft[fi].rules[ri].actions.push(Model.newDraftAction())
+    commit()
+  }
+  function removeAction(fi, ri, ai) {
+    draft[fi].rules[ri].actions.splice(ai, 1)
+    commit()
+  }
+  function moveAction(fi, ri, ai, delta) { moveIn(draft[fi].rules[ri].actions, ai, delta) }
+  function setActionVerb(fi, ri, ai, verb) {
+    var action = draft[fi].rules[ri].actions[ai]
+    action.verb = verb
+    action.params = Model.defaultParamsFor(verb)
+    commit()
+  }
+  function setActionParam(fi, ri, ai, key, value) {
+    draft[fi].rules[ri].actions[ai].params[key] = value
+  }
+  // Choice params (upload's provider) decide which other inputs exist.
+  function setActionChoice(fi, ri, ai, key, value) {
+    draft[fi].rules[ri].actions[ai].params[key] = value
+    commit()
+  }
+
+  function moveIn(list, index, delta) {
     var to = index + delta
     if (to < 0 || to >= list.length) return
     var item = list.splice(index, 1)[0]
@@ -147,7 +213,7 @@ Item {
           id: folderCard
           required property var modelData
           required property int index
-          readonly property var folder: modelData
+          readonly property int fi: index
 
           width: body.width
           height: folderColumn.implicitHeight + Style.space(20)
@@ -179,9 +245,9 @@ Item {
               TextField {
                 width: parent.width - Style.space(64)
                 foreground: root.fg
-                text: folderCard.folder.path
+                text: folderCard.modelData.path
                 placeholderText: "~/Downloads"
-                onTextEdited: folderCard.folder.path = text
+                onTextEdited: root.setFolder(folderCard.fi, "path", text)
               }
 
               Button {
@@ -189,10 +255,7 @@ Item {
                 tooltipText: "Remove folder"
                 foreground: root.fg
                 anchors.verticalCenter: parent.verticalCenter
-                onClicked: {
-                  root.draft.splice(folderCard.index, 1)
-                  root.commit()
-                }
+                onClicked: root.removeFolder(folderCard.fi)
               }
             }
 
@@ -210,8 +273,11 @@ Item {
                 }
                 ToggleSwitch {
                   foreground: root.fg
-                  checked: folderCard.folder.recursive === true
-                  onToggled: { checked = !checked; folderCard.folder.recursive = checked }
+                  checked: folderCard.modelData.recursive === true
+                  onToggled: {
+                    checked = !checked
+                    root.setFolder(folderCard.fi, "recursive", checked)
+                  }
                 }
               }
 
@@ -226,8 +292,11 @@ Item {
                 }
                 ToggleSwitch {
                   foreground: root.fg
-                  checked: folderCard.folder.enabled !== false
-                  onToggled: { checked = !checked; folderCard.folder.enabled = checked }
+                  checked: folderCard.modelData.enabled !== false
+                  onToggled: {
+                    checked = !checked
+                    root.setFolder(folderCard.fi, "enabled", checked)
+                  }
                 }
               }
             }
@@ -248,21 +317,21 @@ Item {
               TextField {
                 width: parent.width - Style.space(58)
                 foreground: root.fg
-                text: folderCard.folder.ignore
+                text: folderCard.modelData.ignore
                 placeholderText: "extra globs — *.iso, keep-*"
-                onTextEdited: folderCard.folder.ignore = text
+                onTextEdited: root.setFolder(folderCard.fi, "ignore", text)
               }
             }
 
             // ------------------------------------------------------ rules
             Repeater {
-              model: folderCard.folder.rules
+              model: folderCard.modelData.rules
 
               BorderSurface {
                 id: ruleCard
                 required property var modelData
                 required property int index
-                readonly property var rule: modelData
+                readonly property int ri: index
 
                 width: folderColumn.width
                 height: ruleColumn.implicitHeight + Style.space(16)
@@ -286,29 +355,29 @@ Item {
                     TextField {
                       width: parent.width - Style.space(96)
                       foreground: root.fg
-                      text: ruleCard.rule.name
+                      text: ruleCard.modelData.name
                       placeholderText: "Rule name"
-                      onTextEdited: ruleCard.rule.name = text
+                      onTextEdited: root.setRule(folderCard.fi, ruleCard.ri, "name", text)
                     }
 
                     Button {
                       iconText: "󰅃"
                       tooltipText: "Move rule up"
                       foreground: root.fg
-                      enabled: ruleCard.index > 0
+                      enabled: ruleCard.ri > 0
                       opacity: enabled ? 1.0 : 0.3
                       anchors.verticalCenter: parent.verticalCenter
-                      onClicked: root.moveItem(folderCard.folder.rules, ruleCard.index, -1)
+                      onClicked: root.moveRule(folderCard.fi, ruleCard.ri, -1)
                     }
 
                     Button {
                       iconText: "󰅀"
                       tooltipText: "Move rule down"
                       foreground: root.fg
-                      enabled: ruleCard.index < folderCard.folder.rules.length - 1
+                      enabled: ruleCard.ri < folderCard.modelData.rules.length - 1
                       opacity: enabled ? 1.0 : 0.3
                       anchors.verticalCenter: parent.verticalCenter
-                      onClicked: root.moveItem(folderCard.folder.rules, ruleCard.index, 1)
+                      onClicked: root.moveRule(folderCard.fi, ruleCard.ri, 1)
                     }
 
                     Button {
@@ -316,10 +385,7 @@ Item {
                       tooltipText: "Remove rule"
                       foreground: root.fg
                       anchors.verticalCenter: parent.verticalCenter
-                      onClicked: {
-                        folderCard.folder.rules.splice(ruleCard.index, 1)
-                        root.commit()
-                      }
+                      onClicked: root.removeRule(folderCard.fi, ruleCard.ri)
                     }
                   }
 
@@ -332,7 +398,7 @@ Item {
                   }
 
                   Text {
-                    visible: ruleCard.rule.conditions.length === 0
+                    visible: ruleCard.modelData.conditions.length === 0
                     text: "No conditions — matches every file"
                     color: Qt.darker(root.fg, 1.6)
                     font.family: root.bar ? root.bar.fontFamily : Style.font.family
@@ -341,13 +407,13 @@ Item {
 
                   // ---------------------------------------- conditions
                   Repeater {
-                    model: ruleCard.rule.conditions
+                    model: ruleCard.modelData.conditions
 
                     Row {
                       id: condRow
                       required property var modelData
                       required property int index
-                      readonly property var cond: modelData
+                      readonly property int ci: index
 
                       width: ruleColumn.width
                       spacing: Style.space(4)
@@ -356,9 +422,11 @@ Item {
                         width: Style.space(64)
                         showLabel: false
                         foreground: root.fg
-                        value: condRow.cond.group
+                        value: condRow.modelData.group
                         options: Model.GROUP_OPTIONS
-                        onChanged: function (v) { condRow.cond.group = v }
+                        onChanged: function (v) {
+                          root.setCondition(folderCard.fi, ruleCard.ri, condRow.ci, "group", v)
+                        }
                         anchors.verticalCenter: parent.verticalCenter
                       }
 
@@ -366,38 +434,35 @@ Item {
                         width: Style.space(100)
                         showLabel: false
                         foreground: root.fg
-                        value: condRow.cond.field
+                        value: condRow.modelData.field
                         options: Model.FIELD_OPTIONS
                         onChanged: function (v) {
-                          condRow.cond.field = v
-                          var ops = Model.opsForField(v)
-                          var valid = false
-                          for (var i = 0; i < ops.length; i++)
-                            if (ops[i].value === condRow.cond.op) valid = true
-                          if (!valid) condRow.cond.op = ops[0].value
-                          opDrop.options = ops
-                          opDrop.value = condRow.cond.op
+                          root.setConditionField(folderCard.fi, ruleCard.ri, condRow.ci, v)
                         }
                         anchors.verticalCenter: parent.verticalCenter
                       }
 
                       Dropdown {
-                        id: opDrop
                         width: Style.space(110)
                         showLabel: false
                         foreground: root.fg
-                        value: condRow.cond.op
-                        options: Model.opsForField(condRow.cond.field)
-                        onChanged: function (v) { condRow.cond.op = v }
+                        value: condRow.modelData.op
+                        options: Model.opsForField(condRow.modelData.field)
+                        onChanged: function (v) {
+                          root.setConditionOp(folderCard.fi, ruleCard.ri, condRow.ci, v)
+                        }
                         anchors.verticalCenter: parent.verticalCenter
                       }
 
                       TextField {
                         width: condRow.width - Style.space(64 + 100 + 110 + 30) - Style.space(16)
                         foreground: root.fg
-                        text: condRow.cond.value
-                        placeholderText: Model.valuePlaceholder(condRow.cond.field, condRow.cond.op)
-                        onTextEdited: condRow.cond.value = text
+                        text: condRow.modelData.value
+                        placeholderText: Model.valuePlaceholder(condRow.modelData.field,
+                          condRow.modelData.op)
+                        onTextEdited: {
+                          root.setCondition(folderCard.fi, ruleCard.ri, condRow.ci, "value", text)
+                        }
                         anchors.verticalCenter: parent.verticalCenter
                       }
 
@@ -406,10 +471,7 @@ Item {
                         tooltipText: "Remove condition"
                         foreground: root.fg
                         anchors.verticalCenter: parent.verticalCenter
-                        onClicked: {
-                          ruleCard.rule.conditions.splice(condRow.index, 1)
-                          root.commit()
-                        }
+                        onClicked: root.removeCondition(folderCard.fi, ruleCard.ri, condRow.ci)
                       }
                     }
                   }
@@ -417,10 +479,7 @@ Item {
                   Button {
                     text: "+ condition"
                     foreground: Qt.darker(root.fg, 1.3)
-                    onClicked: {
-                      ruleCard.rule.conditions.push(Model.newDraftCondition())
-                      root.commit()
-                    }
+                    onClicked: root.addCondition(folderCard.fi, ruleCard.ri)
                   }
 
                   Text {
@@ -433,17 +492,13 @@ Item {
 
                   // ------------------------------------------- actions
                   Repeater {
-                    model: ruleCard.rule.actions
+                    model: ruleCard.modelData.actions
 
                     Column {
                       id: actionRow
                       required property var modelData
                       required property int index
-                      readonly property var act: modelData
-
-                      // Bumped when the verb or provider changes so the
-                      // params Repeater re-reads which inputs to show.
-                      property int paramsRev: 0
+                      readonly property int ai: index
 
                       width: ruleColumn.width
                       spacing: Style.space(4)
@@ -456,36 +511,37 @@ Item {
                           width: Style.space(150)
                           showLabel: false
                           foreground: root.fg
-                          value: actionRow.act.verb
+                          value: actionRow.modelData.verb
                           options: Model.ACTION_OPTIONS
                           onChanged: function (v) {
-                            actionRow.act.verb = v
-                            actionRow.act.params = Model.defaultParamsFor(v)
-                            actionRow.paramsRev++
+                            root.setActionVerb(folderCard.fi, ruleCard.ri, actionRow.ai, v)
                           }
                           anchors.verticalCenter: parent.verticalCenter
                         }
 
-                        Item { width: parent.width - Style.space(150 + 90) - Style.space(16); height: 1 }
+                        Item {
+                          width: parent.width - Style.space(150 + 90) - Style.space(16)
+                          height: 1
+                        }
 
                         Button {
                           iconText: "󰅃"
                           tooltipText: "Move action up"
                           foreground: root.fg
-                          enabled: actionRow.index > 0
+                          enabled: actionRow.ai > 0
                           opacity: enabled ? 1.0 : 0.3
                           anchors.verticalCenter: parent.verticalCenter
-                          onClicked: root.moveItem(ruleCard.rule.actions, actionRow.index, -1)
+                          onClicked: root.moveAction(folderCard.fi, ruleCard.ri, actionRow.ai, -1)
                         }
 
                         Button {
                           iconText: "󰅀"
                           tooltipText: "Move action down"
                           foreground: root.fg
-                          enabled: actionRow.index < ruleCard.rule.actions.length - 1
+                          enabled: actionRow.ai < ruleCard.modelData.actions.length - 1
                           opacity: enabled ? 1.0 : 0.3
                           anchors.verticalCenter: parent.verticalCenter
-                          onClicked: root.moveItem(ruleCard.rule.actions, actionRow.index, 1)
+                          onClicked: root.moveAction(folderCard.fi, ruleCard.ri, actionRow.ai, 1)
                         }
 
                         Button {
@@ -493,18 +549,13 @@ Item {
                           tooltipText: "Remove action"
                           foreground: root.fg
                           anchors.verticalCenter: parent.verticalCenter
-                          onClicked: {
-                            ruleCard.rule.actions.splice(actionRow.index, 1)
-                            root.commit()
-                          }
+                          onClicked: root.removeAction(folderCard.fi, ruleCard.ri, actionRow.ai)
                         }
                       }
 
                       Repeater {
-                        model: {
-                          void actionRow.paramsRev
-                          return Model.actionParams(actionRow.act.verb, actionRow.act.params)
-                        }
+                        model: Model.actionParams(actionRow.modelData.verb,
+                          actionRow.modelData.params)
 
                         Row {
                           id: paramRow
@@ -529,11 +580,14 @@ Item {
                             width: paramRow.width - Style.space(122)
                             foreground: root.fg
                             text: {
-                              var v = actionRow.act.params[paramRow.param.key]
+                              var v = actionRow.modelData.params[paramRow.param.key]
                               return v === undefined ? "" : String(v)
                             }
                             placeholderText: paramRow.param.placeholder || ""
-                            onTextEdited: actionRow.act.params[paramRow.param.key] = text
+                            onTextEdited: {
+                              root.setActionParam(folderCard.fi, ruleCard.ri, actionRow.ai,
+                                paramRow.param.key, text)
+                            }
                           }
 
                           Dropdown {
@@ -542,13 +596,13 @@ Item {
                             showLabel: false
                             foreground: root.fg
                             value: {
-                              var v = actionRow.act.params[paramRow.param.key]
+                              var v = actionRow.modelData.params[paramRow.param.key]
                               return v === undefined ? "" : String(v)
                             }
                             options: paramRow.param.options || []
                             onChanged: function (v) {
-                              actionRow.act.params[paramRow.param.key] = v
-                              actionRow.paramsRev++
+                              root.setActionChoice(folderCard.fi, ruleCard.ri, actionRow.ai,
+                                paramRow.param.key, v)
                             }
                             anchors.verticalCenter: parent.verticalCenter
                           }
@@ -556,10 +610,11 @@ Item {
                           ToggleSwitch {
                             visible: paramRow.param.type === "bool"
                             foreground: root.fg
-                            checked: actionRow.act.params[paramRow.param.key] === true
+                            checked: actionRow.modelData.params[paramRow.param.key] === true
                             onToggled: {
                               checked = !checked
-                              actionRow.act.params[paramRow.param.key] = checked
+                              root.setActionParam(folderCard.fi, ruleCard.ri, actionRow.ai,
+                                paramRow.param.key, checked)
                             }
                             anchors.verticalCenter: parent.verticalCenter
                           }
@@ -571,10 +626,7 @@ Item {
                   Button {
                     text: "+ action"
                     foreground: Qt.darker(root.fg, 1.3)
-                    onClicked: {
-                      ruleCard.rule.actions.push(Model.newDraftAction())
-                      root.commit()
-                    }
+                    onClicked: root.addAction(folderCard.fi, ruleCard.ri)
                   }
 
                   Row {
@@ -594,9 +646,11 @@ Item {
                       width: parent.width - Style.space(82)
                       showLabel: false
                       foreground: root.fg
-                      value: ruleCard.rule.cont !== undefined ? ruleCard.rule.cont : "auto"
+                      value: ruleCard.modelData.cont !== undefined ? ruleCard.modelData.cont : "auto"
                       options: Model.CONTINUE_OPTIONS
-                      onChanged: function (v) { ruleCard.rule.cont = v }
+                      onChanged: function (v) {
+                        root.setRule(folderCard.fi, ruleCard.ri, "cont", v)
+                      }
                       anchors.verticalCenter: parent.verticalCenter
                     }
                   }
@@ -607,10 +661,7 @@ Item {
             Button {
               text: "+ rule"
               foreground: Qt.darker(root.fg, 1.3)
-              onClicked: {
-                folderCard.folder.rules.push(Model.newDraftRule())
-                root.commit()
-              }
+              onClicked: root.addRule(folderCard.fi)
             }
           }
         }
@@ -621,10 +672,7 @@ Item {
         text: "+ watched folder"
         foreground: root.fg
         bordered: true
-        onClicked: {
-          root.draft.push(Model.newDraftFolder())
-          root.commit()
-        }
+        onClicked: root.addFolder()
       }
     }
   }
