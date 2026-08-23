@@ -769,6 +769,7 @@ Item {
         if (root.errors.length > 3) out += "\n… and " + (root.errors.length - 3) + " more"
         return out
       }
+            textFormat: Text.PlainText
       color: root.bar ? root.bar.urgent : "red"
       font.family: root.bar ? root.bar.fontFamily : Style.font.family
       font.pixelSize: Style.font.caption

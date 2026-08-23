@@ -168,7 +168,9 @@ case "$VERB" in
     [[ -n $CMD ]] || fail "missing command"
     [[ $DRY == 1 ]] && dryrun "" "would run: $CMD"
     export OMAZEL_FILE="$FILE"
-    if OUTPUT=$(timeout 600 bash -c "$CMD" omazel "$FILE" 2>&1); then
+    # Output is capped so a chatty command cannot balloon the collector; the
+    # command's own exit status survives the head via PIPESTATUS.
+    if OUTPUT=$(timeout 600 bash -c "$CMD" omazel "$FILE" 2>&1 | head -c 4096; exit "${PIPESTATUS[0]}"); then
       ok "" "$(printf '%s' "$OUTPUT" | tail -n 1 | cut -c1-160)"
     else
       fail "command failed: $(printf '%s' "$OUTPUT" | tail -n 1 | cut -c1-160)"
@@ -305,7 +307,7 @@ case "$VERB" in
         need tailscale
         [[ -n $TARGET ]] || fail "missing taildrop device"
         [[ $DRY == 1 ]] && dryrun "$TARGET" "would taildrop"
-        if OUTPUT=$(timeout 600 tailscale file cp -- "$FILE" "$TARGET:" 2>&1); then
+        if OUTPUT=$(timeout 600 tailscale file cp -- "$FILE" "$TARGET:" 2>&1 | head -c 4096; exit "${PIPESTATUS[0]}"); then
           ok "$TARGET" "sent via Taildrop"
         else
           fail "taildrop failed: $(printf '%s' "$OUTPUT" | tail -n 1 | cut -c1-160)"
@@ -319,7 +321,7 @@ case "$VERB" in
           || fail "rclone remote '$TARGET:' is not configured (rclone config)"
         DEST="$TARGET:$RPATH"
         [[ $DRY == 1 ]] && dryrun "$DEST" "would upload"
-        if OUTPUT=$(timeout 600 rclone copy --quiet -- "$FILE" "$DEST" 2>&1); then
+        if OUTPUT=$(timeout 600 rclone copy --quiet -- "$FILE" "$DEST" 2>&1 | head -c 4096; exit "${PIPESTATUS[0]}"); then
           ok "$DEST" "uploaded"
         else
           fail "rclone failed: $(printf '%s' "$OUTPUT" | tail -n 1 | cut -c1-160)"

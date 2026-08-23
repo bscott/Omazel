@@ -198,10 +198,16 @@ Item {
 
   // ------------------------------------------------------------------- loading
 
+  // Bounded and deadline-guarded on purpose: the path is user-configurable,
+  // so the read must survive it being swapped for a FIFO (timeout), being
+  // enormous (1 MB ceiling), or vanishing between check and read.
   function reload() {
     if (readRulesProcess.running) return
     readRulesProcess.command = ["bash", "-c",
-      'if [[ -f "$1" ]]; then cat -- "$1"; else echo __OMAZEL_MISSING__; fi', "_", rulesPath]
+      'if [[ ! -f "$1" ]]; then echo __OMAZEL_MISSING__; exit 0; fi; ' +
+      'size=$(stat -c %s -- "$1" 2>/dev/null || echo 0); ' +
+      'if (( size > 1048576 )); then echo __OMAZEL_TOOBIG__; exit 0; fi; ' +
+      'timeout 5 head -c 1048576 -- "$1"', "_", rulesPath]
     readRulesProcess.running = true
   }
 
@@ -215,6 +221,14 @@ Item {
       rulesFileExists = false
       configLoaded = false
       configError = "No rules file at " + rulesPath
+      configErrors = []
+      folders = []
+      rulesText = ""
+      return
+    }
+    if (text.indexOf("__OMAZEL_TOOBIG__") === 0) {
+      configLoaded = false
+      configError = "Rules file exceeds 1 MB — refusing to load it"
       configErrors = []
       folders = []
       rulesText = ""
@@ -361,6 +375,7 @@ Item {
     statProcess.job = job
     statProcess.command = ["bash", probeScript, job.path].concat(Model.probeArgs(folder))
     statProcess.running = true
+    probeWatchdog.restart()
   }
 
   // Builds the enriched file record rule matching sees, from a probe result.
@@ -492,6 +507,7 @@ Item {
       "OMAZEL_DRYRUN=" + (dryRun ? "1" : "0"),
       "bash", actScript].concat(plan.argv)
     actProcess.running = true
+    actWatchdog.restart()
   }
 
   function recordOutcome(plan, fields, exitCode) {
@@ -620,6 +636,39 @@ Item {
   }
 
   Timer {
+    // A probe that never exits — a file swapped for something unreadable, a
+    // wedged filesystem — would otherwise block every later evaluation,
+    // since kickStat() skips while its process runs. The per-tool timeouts
+    // inside the probe script make this a backstop, not the primary bound.
+    id: probeWatchdog
+    interval: 45000
+    repeat: false
+    onTriggered: {
+      if (!statProcess.running) return
+      statProcess.job = null
+      statProcess.running = false
+      root.kickStat()
+    }
+  }
+
+  Timer {
+    // Same reasoning for actions. Slightly above the act script's own
+    // longest internal timeout (10 minutes for run/upload), so the script's
+    // cleaner error path wins whenever it can.
+    id: actWatchdog
+    interval: 660000
+    repeat: false
+    onTriggered: {
+      if (!actProcess.running) return
+      var plan = root._currentPlan
+      root._currentPlan = null
+      if (plan) root.recordOutcome(plan, { status: "error", message: "action timed out" }, 1)
+      actProcess.running = false
+      root.kickAct()
+    }
+  }
+
+  Timer {
     id: updateCheckTimer
     interval: Math.max(900, root.updateCheckIntervalSec) * 1000
     repeat: true
@@ -699,6 +748,7 @@ Item {
     command: []
     stdout: StdioCollector { id: statStdout; waitForEnd: true }
     onExited: function (exitCode) {
+      probeWatchdog.stop()
       var job = statProcess.job
       statProcess.job = null
       if (exitCode === 0 && job && job.gen === root._configGen) {
@@ -735,6 +785,7 @@ Item {
     stdout: StdioCollector { id: actStdout; waitForEnd: true }
     stderr: StdioCollector { id: actStderr; waitForEnd: true }
     onExited: function (exitCode) {
+      actWatchdog.stop()
       var plan = root._currentPlan
       root._currentPlan = null
       if (plan) {

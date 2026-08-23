@@ -190,6 +190,7 @@ BarWidget {
           Text {
             text: root.statusLine
             color: Qt.darker(root.bar.foreground, 1.3)
+            textFormat: Text.PlainText
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.caption
             elide: Text.ElideRight
@@ -413,6 +414,7 @@ BarWidget {
 
                 Text {
                   text: root.shortPath(folderRow.modelData.path)
+            textFormat: Text.PlainText
                   color: folderRow.folderPaused
                     ? Qt.darker(root.bar.foreground, 1.6) : root.bar.foreground
                   font.family: root.bar.fontFamily
@@ -423,6 +425,7 @@ BarWidget {
 
                 Text {
                   text: folderRow.modelData.rules.length + " rule"
+            textFormat: Text.PlainText
                     + (folderRow.modelData.rules.length === 1 ? "" : "s")
                     + (folderRow.modelData.recursive ? " · recursive" : "")
                     + (folderRow.folderPaused ? " · paused" : "")
@@ -506,6 +509,7 @@ BarWidget {
                 }
                 color: activityRow.isError
                   ? root.bar.urgent : root.bar.foreground
+            textFormat: Text.PlainText
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.caption
                 elide: Text.ElideMiddle
@@ -514,6 +518,7 @@ BarWidget {
 
               Text {
                 text: activityRow.modelData.rule
+            textFormat: Text.PlainText
                   + (activityRow.modelData.message !== ""
                     ? " · " + activityRow.modelData.message : "")
                 color: activityRow.isError
@@ -548,6 +553,7 @@ BarWidget {
           }
           return "Missing tools: " + parts.join(", ")
         }
+            textFormat: Text.PlainText
         color: root.bar.urgent
         font.family: root.bar.fontFamily
         font.pixelSize: Style.font.caption
@@ -566,6 +572,7 @@ BarWidget {
           return out
         }
         color: root.bar.urgent
+            textFormat: Text.PlainText
         font.family: root.bar.fontFamily
         font.pixelSize: Style.font.caption
         wrapMode: Text.WordWrap
@@ -575,6 +582,7 @@ BarWidget {
 
       Text {
         text: root.engine ? root.engine.lastError : ""
+            textFormat: Text.PlainText
         color: root.bar.urgent
         font.family: root.bar.fontFamily
         font.pixelSize: Style.font.caption
@@ -632,6 +640,7 @@ BarWidget {
                 if (root.engine.updateSubject !== "") head += " — " + root.engine.updateSubject
                 return head
               }
+            textFormat: Text.PlainText
               color: root.bar.foreground
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption

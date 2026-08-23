@@ -31,14 +31,26 @@ emit size "$F_SIZE"
 emit mtime "$F_MTIME"
 emit btime "$F_BTIME"
 
+# Everything below opens the file by path again, so it only runs for what
+# stat just said is a regular file — and every reopening tool still gets a
+# deadline and a byte ceiling, because the path can be swapped for a FIFO (or
+# anything else unbounded) between that check and the open.
+[[ $F_TYPE == "regular file" ]] || exit 0
+
+# First 8 MB of the file, deadline-guarded. dd on a swapped FIFO would block
+# forever; timeout turns that into an empty probe result instead of a stall.
+read_head() {
+  timeout 10 dd if="$FILE" bs=65536 count=128 2>/dev/null
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --mime)
-      emit mime "$(file -b --mime-type -- "$FILE" 2>/dev/null || true)"
+      emit mime "$(timeout 10 file -b --mime-type -- "$FILE" 2>/dev/null || true)"
       shift
       ;;
     --source)
-      emit source "$(getfattr -n user.xdg.origin.url --only-values -- "$FILE" 2>/dev/null || true)"
+      emit source "$(timeout 5 getfattr -n user.xdg.origin.url --only-values -- "$FILE" 2>/dev/null || true)"
       shift
       ;;
     --grep)
@@ -46,9 +58,9 @@ while [[ $# -gt 0 ]]; do
       # grep exits 2 on trouble (unreadable file, bad regex); both non-hit and
       # trouble read as 0 so a broken pattern can never make a rule fire.
       if [[ $MODE == E ]]; then
-        grep -qiE -- "$PATTERN" "$FILE" 2>/dev/null && HIT=1 || HIT=0
+        read_head | grep -qiE -- "$PATTERN" 2>/dev/null && HIT=1 || HIT=0
       else
-        grep -qiF -- "$PATTERN" "$FILE" 2>/dev/null && HIT=1 || HIT=0
+        read_head | grep -qiF -- "$PATTERN" 2>/dev/null && HIT=1 || HIT=0
       fi
       emit "probe:$ID" "$HIT"
       shift 4
