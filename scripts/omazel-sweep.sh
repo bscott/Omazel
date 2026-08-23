@@ -12,7 +12,12 @@
 #
 # Usage: omazel-sweep.sh <dir> [recursive 0|1] [maxEntries]
 
-set -uo pipefail
+# Deliberately no pipefail: `head` closing the pipe after $MAX rows makes
+# find/sed exit on SIGPIPE (141), which is the cap working as intended — with
+# pipefail that would turn a large folder's sweep into a non-zero exit the
+# service discards, processing nothing at all. The pipeline's status is
+# head's, which is what we mean.
+set -u
 
 DIR="${1:-}"
 RECURSIVE="${2:-0}"

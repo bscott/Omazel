@@ -578,6 +578,61 @@ path = "/a"
     Model.planFile(rec, rule, 10)[0].argv[2], "FINAL.pdf")
 }
 
+// ------------------------------------------------------------- hidden files
+
+{
+  const folder = Model.compileConfig(Model.parseToml(`
+[[folder]]
+path = "~/Drop"
+recursive = true
+  [[folder.rule]]
+  name = "everything"
+  actions = [{ do = "trash" }]
+`).value, HOME).folders[0]
+  const dotfile = Model.fileRecord("/home/user/Drop/.env", 1, 1)
+  check("hidden: dotfile never matches", Model.planFile(dotfile, folder, 10), [])
+  const nested = Model.fileRecord("/home/user/Drop/.cache/blob.bin", 1, 1)
+  check("hidden: file under a hidden directory never matches",
+    Model.planFile(nested, folder, 10), [])
+  const plain = Model.fileRecord("/home/user/Drop/sub/file.txt", 1, 1)
+  check("hidden: plain nested file still matches",
+    Model.planFile(plain, folder, 10).length, 1)
+}
+
+{
+  // Watching a hidden folder on purpose must still work — hiddenness is
+  // judged relative to the watched path, not absolutely.
+  const folder = Model.compileConfig(Model.parseToml(`
+[[folder]]
+path = "~/.config/drop"
+  [[folder.rule]]
+  name = "r"
+  actions = [{ do = "notify" }]
+`).value, HOME).folders[0]
+  const f = Model.fileRecord("/home/user/.config/drop/file.txt", 1, 1)
+  check("hidden: deliberately watched hidden folder works",
+    Model.planFile(f, folder, 10).length, 1)
+}
+
+// ------------------------------------------------------------------ rule ids
+
+{
+  const folder = Model.compileConfig(Model.parseToml(`
+[[folder]]
+path = "/a"
+  [[folder.rule]]
+  name = "same name"
+  continue = true
+  actions = [{ do = "notify", message = "first" }]
+  [[folder.rule]]
+  name = "same name"
+  actions = [{ do = "notify", message = "second" }]
+`).value, HOME).folders[0]
+  const plans = Model.planFile(Model.fileRecord("/a/x.txt", 1, 1), folder, 10)
+  check("ruleId: distinct positions even with identical names",
+    plans.map(p => p.ruleId), [0, 1])
+}
+
 // ------------------------------------------------------------- continue flag
 
 {

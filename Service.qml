@@ -155,6 +155,12 @@ Item {
 
   // Plain JS state, not bindings: these change constantly and nothing in the
   // UI needs to react to the intermediate steps.
+  // Bumped on every rules (re)load. Async work — pending events, queued
+  // probes, an in-flight sweep — carries the generation it was created under,
+  // and results from an older generation are discarded: a folder index from
+  // the previous config may point at a completely different folder now.
+  property int _configGen: 0
+
   property var _pendingEvents: ({})   // path -> { due, folderIndex }
   property int _pendingCount: 0
   property var _statQueue: []
@@ -196,6 +202,11 @@ Item {
   }
 
   function applyRules(text) {
+    _configGen += 1
+    _pendingEvents = {}
+    _pendingCount = 0
+    _statQueue = []
+    _sweepQueue = []
     if (text.indexOf("__OMAZEL_MISSING__") === 0) {
       rulesFileExists = false
       configLoaded = false
@@ -330,12 +341,13 @@ Item {
     for (var i = 0; i < _statQueue.length; i++) {
       if (_statQueue[i].path === path) return
     }
-    _statQueue.push({ path: path, folderIndex: folderIndex })
+    _statQueue.push({ path: path, folderIndex: folderIndex, gen: _configGen })
   }
 
   function kickStat() {
     if (statProcess.running || _statQueue.length === 0) return
     var job = _statQueue.shift()
+    if (job.gen !== _configGen) { kickStat(); return }
     var folder = folders[job.folderIndex]
     if (!folder) { kickStat(); return }
     statProcess.job = job
@@ -382,6 +394,7 @@ Item {
     if (_sweepQueue.length === 0) { sweeping = false; return }
     var index = _sweepQueue.shift()
     sweepProcess.folderIndex = index
+    sweepProcess.gen = _configGen
     sweepProcess.command = ["bash", sweepScript, folders[index].path,
       folders[index].recursive ? "1" : "0", "2000"]
     sweepProcess.running = true
@@ -429,18 +442,34 @@ Item {
     if (paused || pausedFolders[folder.path] === true) return
     var now = Math.floor(Date.now() / 1000)
     var plans = Model.planFile(file, folder, now)
+    // The cooldown is per matched rule: decided once for all of a rule's
+    // actions, so a rule like [encrypt, upload, notify] runs whole. Deciding
+    // it per plan would let the first action's cooldown stamp swallow the
+    // rest of its own rule. Keyed by rule position, not name, so two rules
+    // sharing a name cannot share a cooldown entry.
+    var decided = {}
     for (var i = 0; i < plans.length; i++) {
-      var key = plans[i].file + "\u0000" + plans[i].rule
-      if (_cooldown[key] !== undefined && now - _cooldown[key] < cooldownSec) continue
-      _cooldown[key] = now
+      var key = plans[i].file + "\u0000" + folder.path + "\u0000" + plans[i].ruleId
+      if (decided[key] === undefined) {
+        if (_cooldown[key] !== undefined && now - _cooldown[key] < cooldownSec) {
+          decided[key] = false
+        } else {
+          decided[key] = true
+          _cooldown[key] = now
+        }
+      }
+      if (!decided[key]) continue
       if (!alreadyQueued(plans[i])) _actQueue.push(plans[i])
     }
     kickAct()
   }
 
+  // Identity is the full invocation: the same verb twice with different
+  // arguments (say, copies to two destinations) is two distinct actions.
   function alreadyQueued(plan) {
+    var id = plan.argv.join("\u0000")
     for (var i = 0; i < _actQueue.length; i++) {
-      if (_actQueue[i].file === plan.file && _actQueue[i].verb === plan.verb) return true
+      if (_actQueue[i].argv.join("\u0000") === id) return true
     }
     return false
   }
@@ -480,6 +509,28 @@ Item {
       actionsSession += 1
       if (dest !== "") _recentOutputs[dest] = now
       pruneRecentOutputs(now)
+      // A relocation moves the ground under any of this file's still-queued
+      // actions ([encrypt+delete, upload] must upload the .age file, not the
+      // vanished plaintext). Retarget them at the destination; when there is
+      // none (trash, delete), the file is simply gone, so drop them. Dry runs
+      // move nothing and change nothing here.
+      if (status === "ok" && plan.relocates === true) {
+        var remaining = []
+        for (var i = 0; i < _actQueue.length; i++) {
+          var queued = _actQueue[i]
+          if (queued.file !== plan.file) {
+            remaining.push(queued)
+            continue
+          }
+          if (dest !== "") {
+            queued.file = dest
+            queued.argv = queued.argv.slice()
+            queued.argv[1] = dest
+            remaining.push(queued)
+          }
+        }
+        _actQueue = remaining
+      }
     } else {
       errorsSession += 1
       lastError = Model.elide(plan.rule + ": " + (entry.message || plan.verb + " failed"), 140)
@@ -642,7 +693,7 @@ Item {
     onExited: function (exitCode) {
       var job = statProcess.job
       statProcess.job = null
-      if (exitCode === 0 && job) {
+      if (exitCode === 0 && job && job.gen === root._configGen) {
         var fields = Model.parseFields(String(statStdout.text || ""))
         // Only regular files are ruled on: directories moving into a watched
         // folder are left alone, matching what people expect from Hazel.
@@ -658,11 +709,13 @@ Item {
   Process {
     id: sweepProcess
     property int folderIndex: -1
+    property int gen: -1
     running: false
     command: []
     stdout: StdioCollector { id: sweepStdout; waitForEnd: true }
     onExited: function (exitCode) {
-      if (exitCode === 0) root.applySweep(sweepProcess.folderIndex, String(sweepStdout.text || ""))
+      if (exitCode === 0 && sweepProcess.gen === root._configGen)
+        root.applySweep(sweepProcess.folderIndex, String(sweepStdout.text || ""))
       root.kickSweep()
     }
   }

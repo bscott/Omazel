@@ -927,6 +927,15 @@ function buildPlan(action, file, nowSec, captures) {
 function planFile(file, folder, nowSec) {
   var out = []
   if (matchesAnyGlob(file.fullname, folder.ignore)) return out
+  // Hidden files, and files inside hidden directories, are never acted on —
+  // judged relative to the watched folder, so deliberately watching a hidden
+  // folder like ~/.config/foo still works.
+  var rel = file.path.indexOf(folder.path + "/") === 0
+    ? file.path.substring(folder.path.length + 1) : file.fullname
+  var segments = rel.split("/")
+  for (var s = 0; s < segments.length; s++) {
+    if (segments[s].charAt(0) === ".") return out
+  }
   for (var r = 0; r < folder.rules.length; r++) {
     var rule = folder.rules[r]
     if (!ruleMatches(file, rule, nowSec)) continue
@@ -936,6 +945,9 @@ function planFile(file, folder, nowSec) {
       var plan = buildPlan(rule.actions[a], file, nowSec, captures)
       if (plan === null) continue
       plan.rule = rule.name
+      // Position, not name, so two rules that happen to share a name cannot
+      // share a cooldown entry.
+      plan.ruleId = r
       plan.file = file.path
       out.push(plan)
       if (plan.relocates) relocated = true
