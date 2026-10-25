@@ -120,6 +120,9 @@ button, the visual rule editor, a text-editor shortcut, every watched folder
 with its own pause toggle, the recent activity feed (including what dry-run
 would have done), rule problems, and missing-tool warnings.
 
+Pausing holds queued actions until you resume; an action already running
+finishes. Pausing one folder lets other folders continue processing.
+
 ## Scripting
 
 ```bash
@@ -145,6 +148,7 @@ under `~/.config/omarchy/plugins/io.github.bscott.omazel`. After changes:
 
 ```bash
 node tests/model.test.js   # rule engine unit tests
+node --test tests/runtime.test.js   # content probes and pause/resume regression tests
 omarchy plugin validate ~/.config/omarchy/plugins/io.github.bscott.omazel
 omarchy-restart-shell      # reload the shell so the service picks up edits
 ```

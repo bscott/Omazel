@@ -55,14 +55,19 @@ while [[ $# -gt 0 ]]; do
       ;;
     --grep)
       MODE="${2:-F}" ID="${3:-0}" PATTERN="${4:-}"
-      # grep exits 2 on trouble (unreadable file, bad regex); both non-hit and
-      # trouble read as 0 so a broken pattern can never make a rule fire.
+      # Drain the bounded reader: grep -q can close early and make a real
+      # match look like failure when the reader gets SIGPIPE under pipefail.
+      # Keep errors unknown, rather than turning them into not_contains hits.
       if [[ $MODE == E ]]; then
-        read_head | grep -qiE -- "$PATTERN" 2>/dev/null && HIT=1 || HIT=0
+        read_head | grep -iE -- "$PATTERN" >/dev/null 2>&1
       else
-        read_head | grep -qiF -- "$PATTERN" 2>/dev/null && HIT=1 || HIT=0
+        read_head | grep -iF -- "$PATTERN" >/dev/null 2>&1
       fi
-      emit "probe:$ID" "$HIT"
+      PROBE_STATUS=("${PIPESTATUS[@]}")
+      if [[ ${PROBE_STATUS[0]} == 0 && ${PROBE_STATUS[1]} -le 1 ]]; then
+        [[ ${PROBE_STATUS[1]} == 0 ]] && HIT=1 || HIT=0
+        emit "probe:$ID" "$HIT"
+      fi
       shift 4
       ;;
     --script)

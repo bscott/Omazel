@@ -295,6 +295,7 @@ Item {
 
   function setPaused(on) {
     paused = on === true
+    if (!paused) kickAct()
     return paused
   }
 
@@ -304,6 +305,7 @@ Item {
     if (next[path] === true) delete next[path]
     else next[path] = true
     pausedFolders = next
+    if (next[path] !== true) kickAct()
     return next[path] === true
   }
 
@@ -483,6 +485,8 @@ Item {
         }
       }
       if (!decided[key]) continue
+      // Retain the originating watch folder even after a move retargets file.
+      plans[i].folderPath = folder.path
       if (!alreadyQueued(plans[i])) _actQueue.push(plans[i])
     }
     kickAct()
@@ -499,8 +503,13 @@ Item {
   }
 
   function kickAct() {
-    if (actProcess.running || _actQueue.length === 0) return
-    var plan = _actQueue.shift()
+    if (paused || actProcess.running || _actQueue.length === 0) return
+    // Hold paused folders without blocking other folders. An action already
+    // running is allowed to finish; interrupting a file operation is unsafe.
+    var index = 0
+    while (index < _actQueue.length && pausedFolders[_actQueue[index].folderPath] === true) index++
+    if (index === _actQueue.length) return
+    var plan = _actQueue.splice(index, 1)[0]
     _currentPlan = plan
     actProcess.command = ["env",
       "OMAZEL_RULE=" + plan.rule,
